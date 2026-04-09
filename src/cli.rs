@@ -50,6 +50,14 @@ pub enum Commands {
     Write {
         /// Prompt describing what to write
         prompt: String,
+
+        /// Maximum tokens to generate (default: from config, typically 4096)
+        #[arg(long)]
+        max_tokens: Option<u32>,
+
+        /// Number of candidates to generate and rank (default: from config)
+        #[arg(long, short = 'n')]
+        candidates: Option<u16>,
     },
 
     /// Rewrite a file in the active voice

@@ -44,8 +44,21 @@ fn detect_adapter(profile_dir: &std::path::Path) -> Option<AdapterRef> {
     None
 }
 
-pub async fn run(ctx: Ctx, prompt: String) -> Result<(), AppError> {
-    let cfg = config::load()?;
+pub async fn run(
+    ctx: Ctx,
+    prompt: String,
+    max_tokens_override: Option<u32>,
+    candidates_override: Option<u16>,
+) -> Result<(), AppError> {
+    let mut cfg = config::load()?;
+
+    // Apply CLI overrides
+    if let Some(mt) = max_tokens_override {
+        cfg.decoding.max_tokens = mt;
+    }
+    if let Some(n) = candidates_override {
+        cfg.decoding.n_candidates = n;
+    }
 
     let model_id: ModelId = cfg
         .base_model
