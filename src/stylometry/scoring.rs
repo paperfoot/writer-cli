@@ -246,17 +246,18 @@ fn slop_penalty(text: &str) -> f64 {
         return 0.0;
     }
 
-    let word_hits: usize = ai_slop::BANNED_WORDS
-        .iter()
-        .filter(|w| text_lower.contains(**w))
-        .count();
+    // Count actual occurrences, not just presence (Codex review fix)
+    let mut word_occurrences: usize = 0;
+    for word in ai_slop::BANNED_WORDS {
+        word_occurrences += text_lower.matches(word).count();
+    }
 
-    let phrase_hits: usize = ai_slop::BANNED_PHRASES
-        .iter()
-        .filter(|p| text_lower.contains(**p))
-        .count();
+    let mut phrase_occurrences: usize = 0;
+    for phrase in ai_slop::BANNED_PHRASES {
+        phrase_occurrences += text_lower.matches(phrase).count();
+    }
 
-    let total_hits = word_hits + phrase_hits * 2; // phrases count double
+    let total_hits = word_occurrences + phrase_occurrences * 2;
     let density = total_hits as f64 / word_count * 100.0;
 
     // Scale: 0 hits = 0.0, 5+ per 100 words = 1.0

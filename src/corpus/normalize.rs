@@ -40,24 +40,22 @@ fn strip_html_tags(content: String) -> String {
 }
 
 /// Strip SVG blocks entirely (cover images from epub conversion).
+/// Handles both multi-line and inline `<svg>...</svg>` on a single line.
 fn strip_svg_blocks(content: String) -> String {
     let mut result = String::new();
-    let mut in_svg = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.contains("<svg") || trimmed.starts_with("svg") {
-            in_svg = true;
-            continue;
+    let mut remaining = content.as_str();
+
+    while let Some(start) = remaining.find("<svg") {
+        result.push_str(&remaining[..start]);
+        remaining = &remaining[start..];
+        if let Some(end) = remaining.find("</svg>") {
+            remaining = &remaining[end + 6..];
+        } else {
+            // Unclosed SVG — drop the rest
+            return result;
         }
-        if in_svg {
-            if trimmed.contains("</svg>") || trimmed.contains("/svg") {
-                in_svg = false;
-            }
-            continue;
-        }
-        result.push_str(line);
-        result.push('\n');
     }
+    result.push_str(remaining);
     result
 }
 

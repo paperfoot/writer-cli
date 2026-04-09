@@ -79,9 +79,13 @@ pub async fn run(
             .await
             .map_err(|e| DecodingError::Backend(e.to_string()))?;
 
-        let mut candidates: Vec<(String, u32, u64)> = Vec::new();
+        // Collect candidates keyed by their backend candidate_index
+        // so ordering is deterministic regardless of JoinSet completion order.
+        let mut candidate_map: std::collections::BTreeMap<u16, (String, u32, u64)> =
+            std::collections::BTreeMap::new();
         let mut current_texts: std::collections::HashMap<u16, String> =
             std::collections::HashMap::new();
+        let mut errors: Vec<String> = Vec::new();
 
         while let Some(event) = stream.next().await {
             match event {
@@ -108,26 +112,44 @@ pub async fn run(
                     } else {
                         full_text
                     };
-                    candidates.push((text, usage.generated_tokens, usage.elapsed_ms));
+                    candidate_map.insert(
+                        candidate_index,
+                        (text, usage.generated_tokens, usage.elapsed_ms),
+                    );
                 }
-                GenerationEvent::Error { message, .. } => {
-                    return Err(DecodingError::Backend(message));
+                GenerationEvent::Error {
+                    candidate_index,
+                    message,
+                } => {
+                    // Don't fail globally — one bad candidate shouldn't
+                    // discard other usable candidates.
+                    errors.push(format!("candidate {candidate_index}: {message}"));
                 }
             }
         }
 
+        // Convert to ordered vec — keys are the real backend indices
+        let backend_indices: Vec<u16> = candidate_map.keys().copied().collect();
+        let candidates: Vec<(String, u32, u64)> =
+            candidate_map.into_values().collect();
+
         if candidates.is_empty() {
-            return Err(DecodingError::Backend(
-                "No candidates generated".to_string(),
-            ));
+            let err_detail = if errors.is_empty() {
+                "No candidates generated".to_string()
+            } else {
+                format!("All candidates failed: {}", errors.join("; "))
+            };
+            return Err(DecodingError::Backend(err_detail));
         }
 
         // Rank candidates by stylometric distance
         let ranked = ranker::rank(&candidates, fingerprint);
 
         // Filter best candidate
-        let (best_idx, best_distance) = ranked[0];
-        let (ref best_text, tokens, elapsed) = candidates[best_idx];
+        let (best_vec_idx, best_distance) = ranked[0];
+        let (ref best_text, tokens, elapsed) = candidates[best_vec_idx];
+        // Map back to the real backend candidate index
+        let best_backend_idx = backend_indices[best_vec_idx] as usize;
 
         let filter_result = filter::check(best_text, fingerprint, config);
 
@@ -135,7 +157,7 @@ pub async fn run(
             return Ok(GenerationResult {
                 text: best_text.clone(),
                 distance: best_distance,
-                candidate_index: best_idx,
+                candidate_index: best_backend_idx,
                 candidates_generated: candidates.len(),
                 tokens_generated: tokens,
                 elapsed_ms: elapsed,
