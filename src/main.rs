@@ -6,9 +6,10 @@
 
 mod cli;
 mod commands;
-mod config;
-mod error;
 mod output;
+
+use writer_cli::config;
+use writer_cli::error;
 
 use clap::Parser;
 

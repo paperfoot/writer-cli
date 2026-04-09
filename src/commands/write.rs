@@ -1,11 +1,12 @@
 use serde::Serialize;
-use tokio_stream::StreamExt;
 
 use writer_cli::backends::inference::ollama::OllamaBackend;
-use writer_cli::backends::inference::request::GenerationRequest;
-use writer_cli::backends::inference::response::GenerationEvent;
 use writer_cli::backends::inference::InferenceBackend;
 use writer_cli::backends::types::ModelId;
+use writer_cli::decoding;
+use writer_cli::decoding::prompts;
+use writer_cli::stylometry::fingerprint::StylometricFingerprint;
+
 use crate::config;
 use crate::error::AppError;
 use crate::output::{self, Ctx};
@@ -16,14 +17,19 @@ struct WriteResult {
     model: String,
     tokens_generated: u32,
     elapsed_ms: u64,
+    stylometric_distance: f64,
+    candidates_generated: usize,
+    regenerations: usize,
 }
 
 pub async fn run(ctx: Ctx, prompt: String) -> Result<(), AppError> {
     let cfg = config::load()?;
     let backend = OllamaBackend::new(&cfg.inference.ollama_url);
 
-    // Verify Ollama is running
-    backend.ping().await.map_err(|e| AppError::Transient(e.to_string()))?;
+    backend
+        .ping()
+        .await
+        .map_err(|e| AppError::Transient(e.to_string()))?;
 
     let model_id: ModelId = cfg
         .base_model
@@ -35,52 +41,56 @@ pub async fn run(ctx: Ctx, prompt: String) -> Result<(), AppError> {
         .await
         .map_err(|e| AppError::Transient(e.to_string()))?;
 
-    let req = GenerationRequest::new(model_id.clone(), prompt)
-        .with_n_candidates(1); // Single candidate for now; Phase 4 adds rank-N
+    // Load fingerprint if available
+    let profile_dir = config::profiles_dir().join(&cfg.active_profile);
+    let fp_path = profile_dir.join("fingerprint.json");
+    let fingerprint = if fp_path.exists() {
+        let fp_json = std::fs::read_to_string(&fp_path)?;
+        serde_json::from_str::<StylometricFingerprint>(&fp_json)
+            .map_err(|e| AppError::Config(format!("Invalid fingerprint.json: {e}")))?
+    } else {
+        StylometricFingerprint::default()
+    };
 
-    let mut stream = backend
-        .generate(&handle, req)
-        .await
-        .map_err(|e| AppError::Transient(e.to_string()))?;
+    // Build system prompt with stylometric priming
+    let system = if fingerprint.word_count > 0 {
+        Some(prompts::system_prompt(&fingerprint))
+    } else {
+        None
+    };
 
-    let mut full_text = String::new();
-    let mut tokens_generated = 0u32;
-    let mut elapsed_ms = 0u64;
+    let write_prompt = prompts::write_prompt(&prompt);
 
-    while let Some(event) = stream.next().await {
-        match event {
-            GenerationEvent::Token { text, .. } => {
-                if !ctx.format.is_json() {
-                    print!("{text}");
-                }
-                full_text = text;
-            }
-            GenerationEvent::Done {
-                usage, full_text: ft, ..
-            } => {
-                full_text = ft;
-                tokens_generated = usage.generated_tokens;
-                elapsed_ms = usage.elapsed_ms;
-            }
-            GenerationEvent::Error { message, .. } => {
-                return Err(AppError::Transient(message));
-            }
-        }
-    }
+    // Run through decoding pipeline
+    let result = decoding::run(
+        &backend,
+        &handle,
+        &model_id,
+        &fingerprint,
+        &cfg.decoding,
+        &write_prompt,
+        system.as_deref(),
+    )
+    .await
+    .map_err(|e| AppError::Transient(e.to_string()))?;
 
     if !ctx.format.is_json() {
+        print!("{}", result.text);
         println!();
     }
 
-    let result = WriteResult {
-        text: full_text,
+    let output_result = WriteResult {
+        text: result.text,
         model: model_id.to_string(),
-        tokens_generated,
-        elapsed_ms,
+        tokens_generated: result.tokens_generated,
+        elapsed_ms: result.elapsed_ms,
+        stylometric_distance: result.distance,
+        candidates_generated: result.candidates_generated,
+        regenerations: result.regenerations,
     };
 
     if ctx.format.is_json() {
-        output::print_success_or(ctx, &result, |_| {});
+        output::print_success_or(ctx, &output_result, |_| {});
     }
 
     Ok(())
