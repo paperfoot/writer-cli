@@ -97,39 +97,49 @@ impl OllamaBackend {
 
     fn model_id_to_ollama_tag(model: &ModelId) -> String {
         // Translate writer's owner/name format to Ollama tags.
-        // Writer uses "owner/name" (e.g. "qwen/qwen3.5-9b") but Ollama
-        // uses its own format (e.g. "qwen3.5:9b").
+        //
+        // Strategy: find the last hyphen before a size indicator (e.g. "26b",
+        // "4b", "9b") and replace it with a colon. Strip hyphens between
+        // the model family name and version number.
+        //
+        // Examples:
+        //   google/gemma-4-26b     -> gemma4:26b
+        //   google/gemma-3-4b      -> gemma3:4b
+        //   google/gemma-4-26b-a4b -> gemma4:26b-a4b
+        //   qwen/qwen3.5-9b        -> qwen3.5:9b
+        //   meta/llama3.2-3b       -> llama3.2:3b
+        //   local/gemma4:26b       -> gemma4:26b  (pass-through)
         let name = model.name();
-        let owner = model.owner();
 
-        // Strategy: if name contains a hyphen before a size indicator,
-        // try converting to Ollama's colon format
-        match (owner, name) {
-            ("google", n) if n.contains("gemma") => {
-                // google/gemma-4-26b-a4b -> gemma4:26b-a4b
-                // google/gemma-3-27b -> gemma3:27b
-                n.replacen('-', ":", 1)
-            }
-            ("qwen", n) if n.starts_with("qwen") => {
-                // qwen/qwen3.5-9b -> qwen3.5:9b
-                if let Some(pos) = n.rfind('-') {
-                    let (base, size) = n.split_at(pos);
-                    format!("{base}:{}", &size[1..])
-                } else {
-                    n.to_string()
-                }
-            }
-            ("meta", n) if n.starts_with("llama") => {
-                // meta/llama3.2-3b -> llama3.2:3b
-                if let Some(pos) = n.rfind('-') {
-                    let (base, size) = n.split_at(pos);
-                    format!("{base}:{}", &size[1..])
-                } else {
-                    n.to_string()
-                }
-            }
-            _ => {
-                // Try direct name, then owner/name
+        // If name already contains a colon, it's an Ollama tag — pass through
+        if name.contains(':') {
+            return name.to_string();
+        }
+
+        // Find the size indicator: a segment matching \d+b or \d+b-\w+
+        // Split name by hyphens and find where the size part starts
+        let parts: Vec<&str> = name.split('-').collect();
+        if parts.len() <= 1 {
+            return name.to_string();
+        }
+
+        // Find the index of the first part that looks like a size (e.g. "26b", "4b", "9b")
+        let size_idx = parts.iter().position(|p| {
+            p.len() >= 2 && p.ends_with('b') && p[..p.len()-1].chars().all(|c| c.is_ascii_digit())
+        });
+
+        if let Some(idx) = size_idx {
+            // Everything before the size is the model name (join without hyphens
+            // to collapse version numbers: gemma-4 -> gemma4)
+            let model_name: String = parts[..idx].join("");
+            let size_parts: String = parts[idx..].join("-");
+            format!("{model_name}:{size_parts}")
+        } else {
+            // No size indicator found — try last hyphen as separator
+            if let Some(pos) = name.rfind('-') {
+                let (base, suffix) = name.split_at(pos);
+                format!("{}:{}", base.replace('-', ""), &suffix[1..])
+            } else {
                 name.to_string()
             }
         }
