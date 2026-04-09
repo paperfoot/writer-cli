@@ -58,15 +58,19 @@ pub fn run(ctx: Ctx) -> Result<(), AppError> {
 }
 
 fn toml_serialize(config: &AppConfig) -> Result<String, AppError> {
-    // Simple hand-rolled TOML to avoid pulling in a toml writer dep.
     Ok(format!(
-        "active_profile = \"{}\"\nbase_model = \"{}\"\n\n[update]\nenabled = {}\nowner = \"{}\"\nrepo = \"{}\"\n\n[inference]\ntemperature = {}\nmax_tokens = {}\n",
+        "active_profile = \"{}\"\nbase_model = \"{}\"\n\n\
+         [update]\nenabled = {}\nowner = \"{}\"\nrepo = \"{}\"\n\n\
+         [inference]\nbackend = \"{}\"\ntemperature = {}\nmax_tokens = {}\nollama_url = \"{}\"\n\n\
+         [decoding]\nn_candidates = {}\ncontrastive_enabled = {}\ncontrastive_alpha = {}\nbanned_word_bias = {}\npreferred_word_bias = {}\nkv_quant = \"{}\"\n\n\
+         [training]\nbackend = \"{}\"\nrank = {}\nalpha = {}\nlearning_rate = {}\nbatch_size = {}\nmax_steps = {}\nmax_seq_len = {}\n",
         config.active_profile,
         config.base_model,
-        config.update.enabled,
-        config.update.owner,
-        config.update.repo,
-        config.inference.temperature,
-        config.inference.max_tokens,
+        config.update.enabled, config.update.owner, config.update.repo,
+        config.inference.backend, config.inference.temperature, config.inference.max_tokens, config.inference.ollama_url,
+        config.decoding.n_candidates, config.decoding.contrastive_enabled, config.decoding.contrastive_alpha,
+        config.decoding.banned_word_bias, config.decoding.preferred_word_bias, config.decoding.kv_quant,
+        config.training.backend, config.training.rank, config.training.alpha,
+        config.training.learning_rate, config.training.batch_size, config.training.max_steps, config.training.max_seq_len,
     ))
 }

@@ -181,7 +181,15 @@ pub fn run() {
             "path": config_path.display().to_string(),
             "profiles_dir": profiles_dir.display().to_string(),
             "models_dir": models_dir.display().to_string(),
-            "env_prefix": "WRITER_"
+            "env_prefix": "WRITER_",
+            "inference_backend": "ollama",
+            "training_backend": "mlx-tune",
+            "decoding_stack": [
+                "logit_bias_from_fingerprint",
+                "contrastive_decoding_optional",
+                "generate_n_rank",
+                "post_hoc_filter"
+            ]
         },
         "auto_json_when_piped": true
     });

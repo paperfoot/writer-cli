@@ -11,17 +11,12 @@ use crate::error::AppError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    /// Name of the currently active voice profile
     pub active_profile: String,
-
-    /// Base model to use for training and inference
     pub base_model: String,
-
-    /// Self-update settings
     pub update: UpdateConfig,
-
-    /// Inference settings
     pub inference: InferenceConfig,
+    pub decoding: DecodingConfig,
+    pub training: TrainingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,19 +28,42 @@ pub struct UpdateConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceConfig {
-    /// Sampling temperature (0.0 - 2.0)
+    pub backend: String,
     pub temperature: f32,
-    /// Max new tokens per generation
     pub max_tokens: u32,
+    pub ollama_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecodingConfig {
+    pub n_candidates: u16,
+    pub contrastive_enabled: bool,
+    pub contrastive_alpha: f32,
+    pub banned_word_bias: f32,
+    pub preferred_word_bias: f32,
+    pub kv_quant: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainingConfig {
+    pub backend: String,
+    pub rank: u16,
+    pub alpha: f32,
+    pub learning_rate: f32,
+    pub batch_size: u16,
+    pub max_steps: u32,
+    pub max_seq_len: u32,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             active_profile: "default".into(),
-            base_model: "llama-3.2-3b-instruct".into(),
+            base_model: "google/gemma-4-26b-a4b".into(),
             update: UpdateConfig::default(),
             inference: InferenceConfig::default(),
+            decoding: DecodingConfig::default(),
+            training: TrainingConfig::default(),
         }
     }
 }
@@ -63,8 +81,37 @@ impl Default for UpdateConfig {
 impl Default for InferenceConfig {
     fn default() -> Self {
         Self {
+            backend: "ollama".into(),
             temperature: 0.7,
-            max_tokens: 1024,
+            max_tokens: 2048,
+            ollama_url: "http://localhost:11434".into(),
+        }
+    }
+}
+
+impl Default for DecodingConfig {
+    fn default() -> Self {
+        Self {
+            n_candidates: 8,
+            contrastive_enabled: true,
+            contrastive_alpha: 0.3,
+            banned_word_bias: -4.0,
+            preferred_word_bias: 1.5,
+            kv_quant: "auto".into(),
+        }
+    }
+}
+
+impl Default for TrainingConfig {
+    fn default() -> Self {
+        Self {
+            backend: "mlx-tune".into(),
+            rank: 16,
+            alpha: 32.0,
+            learning_rate: 1e-4,
+            batch_size: 4,
+            max_steps: 1000,
+            max_seq_len: 4096,
         }
     }
 }
