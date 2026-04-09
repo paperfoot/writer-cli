@@ -1,5 +1,10 @@
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::PathBuf;
+
+use writer_cli::corpus::ingest;
+use writer_cli::corpus::sample::Sample;
+use writer_cli::stylometry::fingerprint::StylometricFingerprint;
 
 use crate::config;
 use crate::error::AppError;
@@ -8,17 +13,13 @@ use crate::output::{self, Ctx};
 #[derive(Serialize)]
 struct LearnResult {
     profile: String,
-    files_added: Vec<String>,
-    files_skipped: Vec<SkippedFile>,
+    samples_added: usize,
+    samples_skipped_dedupe: usize,
     total_words: usize,
-    total_chars: usize,
+    fingerprint_word_count: u64,
+    fingerprint_sentence_length_mean: f64,
+    fingerprint_vocabulary_size: u64,
     samples_dir: String,
-}
-
-#[derive(Serialize)]
-struct SkippedFile {
-    path: String,
-    reason: String,
 }
 
 pub fn run(ctx: Ctx, files: Vec<PathBuf>) -> Result<(), AppError> {
@@ -26,85 +27,116 @@ pub fn run(ctx: Ctx, files: Vec<PathBuf>) -> Result<(), AppError> {
     let profile_dir = config::profiles_dir().join(&cfg.active_profile);
     let samples_dir = profile_dir.join("samples");
 
-    if !samples_dir.exists() {
+    if !profile_dir.exists() {
         return Err(AppError::Config(format!(
             "Profile '{}' does not exist. Run: writer init",
             cfg.active_profile
         )));
     }
 
-    let mut files_added = Vec::new();
-    let mut files_skipped = Vec::new();
-    let mut total_words = 0;
-    let mut total_chars = 0;
+    std::fs::create_dir_all(&samples_dir)?;
 
-    for file in files {
-        if !file.exists() {
-            files_skipped.push(SkippedFile {
-                path: file.display().to_string(),
-                reason: "file_not_found".into(),
-            });
-            continue;
+    // Load existing sample hashes for dedup
+    let existing_hashes = load_existing_hashes(&samples_dir);
+
+    // Run the real ingest pipeline
+    let (samples, report) = ingest::ingest(
+        &files,
+        None, // TODO: --context flag
+        cfg.training.max_seq_len,
+        &existing_hashes,
+        true, // normalize by default
+    )
+    .map_err(|e| AppError::Transient(e.to_string()))?;
+
+    // Write samples as JSONL
+    let jsonl_path = samples_dir.join("corpus.jsonl");
+    let mut jsonl_content = if jsonl_path.exists() {
+        std::fs::read_to_string(&jsonl_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    for sample in &samples {
+        if let Ok(line) = serde_json::to_string(sample) {
+            jsonl_content.push_str(&line);
+            jsonl_content.push('\n');
         }
-
-        let content = match std::fs::read_to_string(&file) {
-            Ok(c) => c,
-            Err(e) => {
-                files_skipped.push(SkippedFile {
-                    path: file.display().to_string(),
-                    reason: format!("not_utf8_or_unreadable: {e}"),
-                });
-                continue;
-            }
-        };
-
-        let file_name = file
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "sample.txt".into());
-        let dest = samples_dir.join(&file_name);
-        std::fs::write(&dest, &content)?;
-
-        total_words += content.split_whitespace().count();
-        total_chars += content.chars().count();
-        files_added.push(dest.display().to_string());
     }
+    std::fs::write(&jsonl_path, &jsonl_content)?;
+
+    // Compute fingerprint on all samples (existing + new)
+    let all_samples = load_all_samples(&samples_dir);
+    let fingerprint = StylometricFingerprint::compute(&all_samples);
+
+    // Save fingerprint
+    let fp_path = profile_dir.join("fingerprint.json");
+    let fp_json = serde_json::to_string_pretty(&fingerprint)
+        .map_err(|e| AppError::Transient(e.to_string()))?;
+    std::fs::write(&fp_path, &fp_json)?;
 
     let result = LearnResult {
         profile: cfg.active_profile.clone(),
-        files_added,
-        files_skipped,
-        total_words,
-        total_chars,
+        samples_added: report.samples_added,
+        samples_skipped_dedupe: report.samples_skipped_dedupe,
+        total_words: report.total_words,
+        fingerprint_word_count: fingerprint.word_count,
+        fingerprint_sentence_length_mean: fingerprint.sentence_length.mean,
+        fingerprint_vocabulary_size: fingerprint.vocabulary_size,
         samples_dir: samples_dir.display().to_string(),
     };
 
     output::print_success_or(ctx, &result, |r| {
         use owo_colors::OwoColorize;
         println!(
-            "{} Added {} file(s) to profile '{}'",
+            "{} Ingested {} samples into profile '{}'",
             "+".green(),
-            r.files_added.len(),
+            r.samples_added.to_string().bold(),
             r.profile.bold()
         );
-        println!(
-            "  {} words, {} chars",
-            r.total_words.to_string().bold(),
-            r.total_chars.to_string().bold()
-        );
-        if !r.files_skipped.is_empty() {
+        if r.samples_skipped_dedupe > 0 {
             println!(
-                "  {} {} file(s) skipped",
+                "  {} {} duplicates skipped",
                 "!".yellow(),
-                r.files_skipped.len()
+                r.samples_skipped_dedupe
             );
-            for s in &r.files_skipped {
-                println!("    {} ({})", s.path.dimmed(), s.reason.dimmed());
-            }
         }
+        println!("  {} total words", r.total_words.to_string().bold());
+        println!(
+            "  fingerprint: {} words, {:.1} avg sentence length, {} vocabulary",
+            r.fingerprint_word_count,
+            r.fingerprint_sentence_length_mean,
+            r.fingerprint_vocabulary_size
+        );
         println!();
         println!("Next: {}", "writer train".bold());
     });
 
     Ok(())
+}
+
+fn load_existing_hashes(samples_dir: &std::path::Path) -> HashSet<String> {
+    let mut hashes = HashSet::new();
+    let jsonl_path = samples_dir.join("corpus.jsonl");
+    if let Ok(content) = std::fs::read_to_string(jsonl_path) {
+        for line in content.lines() {
+            if let Ok(sample) = serde_json::from_str::<Sample>(line) {
+                hashes.insert(sample.content_hash);
+            }
+        }
+    }
+    hashes
+}
+
+fn load_all_samples(samples_dir: &std::path::Path) -> Vec<Sample> {
+    let mut samples = Vec::new();
+    let jsonl_path = samples_dir.join("corpus.jsonl");
+    if let Ok(content) = std::fs::read_to_string(jsonl_path) {
+        for line in content.lines() {
+            if let Ok(sample) = serde_json::from_str::<Sample>(line) {
+                samples.push(sample);
+            }
+        }
+    }
+    samples
 }

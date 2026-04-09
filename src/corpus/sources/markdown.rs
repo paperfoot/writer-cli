@@ -65,18 +65,19 @@ fn strip_front_matter(content: &str) -> String {
 
 fn strip_html_comments(content: &str) -> String {
     let mut result = String::with_capacity(content.len());
-    let mut i = 0;
-    let bytes = content.as_bytes();
-    while i < bytes.len() {
-        if i + 3 < bytes.len() && &content[i..i + 4] == "<!--" {
-            if let Some(end) = content[i + 4..].find("-->") {
-                i = i + 4 + end + 3;
-                continue;
-            }
+    let mut remaining = content;
+
+    while let Some(start) = remaining.find("<!--") {
+        result.push_str(&remaining[..start]);
+        remaining = &remaining[start + 4..];
+        if let Some(end) = remaining.find("-->") {
+            remaining = &remaining[end + 3..];
+        } else {
+            // Unclosed comment — skip to end
+            return result;
         }
-        result.push(bytes[i] as char);
-        i += 1;
     }
+    result.push_str(remaining);
     result
 }
 

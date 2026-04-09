@@ -15,6 +15,10 @@ categories = ["command-line-utilities", "text-processing"]
 name = "writer"
 path = "src/main.rs"
 
+[[bin]]
+name = "writer-bench"
+path = "src/bin/writer_bench.rs"
+
 [lib]
 name = "writer_cli"
 path = "src/lib.rs"
@@ -36,6 +40,7 @@ reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], defau
 hdrhistogram = "7"
 unicode-segmentation = "1"
 regex = "1"
+shellexpand = "3"
 
 [dev-dependencies]
 assert_cmd = "2"
