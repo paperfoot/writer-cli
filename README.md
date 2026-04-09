@@ -57,11 +57,12 @@ cargo install writer-cli
 brew install 199-biotechnologies/tap/writer
 ```
 
-After install, the binary on your PATH is `writer`. You also need [Ollama](https://ollama.com/):
+After install, the binary on your PATH is `writer`. You also need [Ollama](https://ollama.com/) and Python with [mlx-lm](https://github.com/ml-explore/mlx-lm) (for training and adapter inference on Apple Silicon):
 
 ```bash
 brew install ollama && brew services start ollama
-ollama pull gemma3:26b-a4b  # or your preferred model
+ollama pull gemma4:26b  # default base model (17 GB, MoE with 3.8B active params)
+pip install mlx-lm     # for LoRA training and adapter-based generation
 ```
 
 ## Quick start
@@ -146,8 +147,10 @@ writer profile new <name>            Create a new profile
 writer profile use <name>            Switch active profile
 writer train [--profile <name>]      Fine-tune a LoRA adapter
 writer write "<prompt>"              Generate in the active voice
+  --max-tokens 2048                    Control output length
+  -n 4                                 Generate N candidates, return best
+  -v                                   Include distance/model/timing in JSON
 writer rewrite <file> [--in-place]   Rewrite a file in the active voice
-writer score <file>                  Stylometric distance to profile
 writer model list                    List available base models
 writer model pull <name>             Download a base model
 writer config show                   Show effective configuration
@@ -157,7 +160,19 @@ writer skill install                 Install SKILL.md to agent platforms
 writer update [--check]              Self-update from GitHub Releases
 ```
 
-Every command accepts `--json` and `--quiet`. Pipe to anything and you get a structured JSON envelope.
+Every command accepts `--json` and `--quiet`. Default `--json` output for `writer write` is just `{"text": "..."}` — clean for piping and agent consumption. Use `-v` for detailed metrics.
+
+## Results
+
+Case study: Douglas Adams' complete works (684K words, 9 books, Gemma 4 26B + LoRA 500 steps).
+
+| Condition | Stylometric Distance | What it means |
+|-----------|---------------------|---------------|
+| Held-out Adams text | 0.121 | Ceiling — real Adams scored against Adams fingerprint |
+| **writer** (LoRA + ranked) | 0.241 | Best generated output |
+| Base model (no adapter) | 0.306 | Generic Gemma 4 output |
+
+The system closes 35% of the gap between generic LLM output and the target voice. See the [research paper](docs/paper/draft-v1.md) for full methodology and analysis.
 
 ## Agent-friendly by default
 
@@ -172,7 +187,7 @@ Everything stays local. That is the whole point.
 | Writing samples | `~/Library/Application Support/writer/profiles/<name>/samples/` | No |
 | Stylometric fingerprint | Computed in-process | No |
 | Base model weights | Managed by Ollama | Only during initial download |
-| Fine-tuned adapter | `profiles/<name>/adapter.safetensors` | No |
+| Fine-tuned adapter | `profiles/<name>/adapters/adapters.safetensors` | No |
 | Generated text | stdout | No |
 | Telemetry | None | -- |
 
@@ -184,16 +199,17 @@ No API keys. No accounts. No upload step. You can run `writer` on an airplane.
 
 ```toml
 active_profile = "default"
-base_model = "google/gemma-4-26b-a4b"
+base_model = "google/gemma-4-26b"
 
 [inference]
-backend = "ollama"
+backend = "ollama"             # ollama for base, mlx auto-selected when adapter present
 temperature = 0.7
-max_tokens = 2048
+max_tokens = 4096
 ollama_url = "http://localhost:11434"
 
 [decoding]
-n_candidates = 8
+n_candidates = 2               # generate N, return stylometrically closest
+max_tokens = 4096              # Gemma 4 needs >=4096 (thinking model)
 contrastive_enabled = true
 contrastive_alpha = 0.3
 banned_word_bias = -4.0
@@ -202,8 +218,10 @@ banned_word_bias = -4.0
 backend = "mlx-tune"
 rank = 16
 alpha = 32.0
-learning_rate = 0.0001
-max_steps = 1000
+learning_rate = 0.00002        # conservative for 26B models
+batch_size = 1
+max_steps = 500
+max_seq_len = 2048
 ```
 
 Precedence: compiled defaults < TOML file < env vars (`WRITER_*`).
