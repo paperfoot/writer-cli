@@ -1,5 +1,6 @@
 //! Inference backends (Ollama, mistral.rs, custom MLX, ...).
 pub mod capabilities;
+pub mod ollama;
 pub mod request;
 pub mod response;
 
