@@ -6,7 +6,7 @@ use crate::stylometry::fingerprint::StylometricFingerprint;
 
 /// Build a system prompt that primes the model with the user's stylometric profile.
 pub fn system_prompt(fingerprint: &StylometricFingerprint) -> String {
-    let avg_sentence_len = fingerprint.sentence_length.mean;
+    let _avg_sentence_len = fingerprint.sentence_length.mean;
     let avg_word_len = fingerprint.word_length.mean;
 
     // Top 5 preferred words (distinctive vocabulary)
@@ -23,8 +23,8 @@ pub fn system_prompt(fingerprint: &StylometricFingerprint) -> String {
     };
 
     // Punctuation profile summary
-    let em_dashes = fingerprint.punctuation.em_dashes_per_1k;
-    let semicolons = fingerprint.punctuation.semicolons_per_1k;
+    let _em_dashes = fingerprint.punctuation.em_dashes_per_1k;
+    let _semicolons = fingerprint.punctuation.semicolons_per_1k;
 
     format!(
         "You are a writer with a distinctive voice. Your writing tends to:\n\

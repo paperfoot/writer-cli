@@ -165,12 +165,7 @@ fn strip_signatures(content: String) -> String {
 /// Remove zero-width characters that pollute text
 fn strip_zero_width(content: String) -> String {
     content
-        .replace('\u{200B}', "") // zero-width space
-        .replace('\u{200C}', "") // zero-width non-joiner
-        .replace('\u{200D}', "") // zero-width joiner
-        .replace('\u{FEFF}', "") // BOM / zero-width no-break space
-        .replace('\u{200E}', "") // left-to-right mark
-        .replace('\u{200F}', "") // right-to-left mark
+        .replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\u{200E}', '\u{200F}'], "") // right-to-left mark
 }
 
 /// Collapse multiple spaces/blank lines
@@ -225,10 +220,8 @@ fn normalize_quotes(content: String) -> String {
         } else {
             // Convert smart to straight
             content
-                .replace('\u{201C}', "\"")
-                .replace('\u{201D}', "\"")
-                .replace('\u{2018}', "'")
-                .replace('\u{2019}', "'")
+                .replace(['\u{201C}', '\u{201D}'], "\"")
+                .replace(['\u{2018}', '\u{2019}'], "'")
         }
     } else {
         content

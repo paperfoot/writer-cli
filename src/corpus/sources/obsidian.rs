@@ -1,7 +1,7 @@
 //! Obsidian vault source parser.
 use std::path::Path;
 
-use crate::corpus::sample::{Sample, SampleMetadata, SampleSource};
+use crate::corpus::sample::{Sample, SampleSource};
 use crate::corpus::sources::markdown;
 
 use super::{Source, SourceError};
@@ -22,7 +22,7 @@ impl Source for ObsidianSource {
 
         for entry in walkdir(path)? {
             let entry_path = entry;
-            if !entry_path.extension().is_some_and(|e| e == "md") {
+            if entry_path.extension().is_none_or(|e| e != "md") {
                 continue;
             }
 
@@ -82,9 +82,9 @@ fn walk_recursive(dir: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<(),
 
 fn detect_daily_note(content: &str) -> bool {
     // Check YAML front matter for daily/journal tags
-    if content.starts_with("---") {
-        if let Some(end) = content[3..].find("---") {
-            let front_matter = &content[3..3 + end].to_lowercase();
+    if let Some(rest) = content.strip_prefix("---") {
+        if let Some(end) = rest.find("---") {
+            let front_matter = &rest[..end].to_lowercase();
             return front_matter.contains("daily")
                 || front_matter.contains("journal");
         }

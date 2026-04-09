@@ -5,7 +5,6 @@
 //! Falls back to internal detection if the humanise-text Python detector
 //! is not available.
 use std::path::Path;
-use std::process::Command;
 
 use crate::stylometry::ai_slop;
 

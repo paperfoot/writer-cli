@@ -30,36 +30,7 @@ struct OllamaModel {
     size: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
-struct OllamaGenerateRequest {
-    model: String,
-    prompt: String,
-    stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
-    options: OllamaOptions,
-}
-
-#[derive(Debug, Serialize)]
-struct OllamaOptions {
-    temperature: f32,
-    top_p: f32,
-    top_k: u32,
-    num_predict: u32,
-    repeat_penalty: f32,
-}
-
-#[derive(Debug, Deserialize)]
-struct OllamaGenerateResponse {
-    response: Option<String>,
-    done: bool,
-    #[serde(default)]
-    total_duration: u64,
-    #[serde(default)]
-    eval_count: u32,
-    #[serde(default)]
-    prompt_eval_count: u32,
-}
+// Legacy /api/generate structs removed — we use /api/chat exclusively.
 
 #[derive(Debug, Serialize)]
 struct OllamaPullRequest {

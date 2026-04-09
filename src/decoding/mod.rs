@@ -28,7 +28,6 @@ use crate::backends::inference::InferenceBackend;
 use crate::backends::types::{AdapterRef, ModelHandle, ModelId};
 use crate::config::DecodingConfig;
 use crate::stylometry::fingerprint::StylometricFingerprint;
-use crate::stylometry::scoring;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GenerationResult {
@@ -50,6 +49,7 @@ pub enum DecodingError {
 }
 
 /// Run the full quality decoding pipeline.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     backend: &dyn InferenceBackend,
     handle: &ModelHandle,

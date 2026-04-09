@@ -52,9 +52,8 @@ pub fn chunk(samples: Vec<Sample>, max_words: usize) -> Vec<Sample> {
                 .iter()
                 .map(|p| p.split_whitespace().count())
                 .sum();
-            while overlap_word_count > overlap_words && overlap_buffer.len() > 1 {
+            if overlap_word_count > overlap_words && overlap_buffer.len() > 1 {
                 overlap_buffer.remove(0);
-                break;
             }
         }
 

@@ -2,12 +2,11 @@
 //!
 //! Reference: mlx-lm (https://github.com/ml-explore/mlx-lm, 4.8k stars)
 //! Uses mlx_lm.lora for LoRA/DoRA fine-tuning via subprocess.
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::artefact::AdapterArtifact;
 use super::config::{DpoConfig, LoraConfig, TrainingProgress};
@@ -92,8 +91,7 @@ impl TrainingBackend for MlxTuneBackend {
         let stderr = child.stderr.take();
 
         // Read stderr in background for error capture
-        let stderr_handle = if let Some(stderr) = stderr {
-            Some(tokio::spawn(async move {
+        let stderr_handle = stderr.map(|stderr| tokio::spawn(async move {
                 let reader = tokio::io::BufReader::new(stderr);
                 let mut lines = Vec::new();
                 use tokio::io::AsyncBufReadExt;
@@ -102,10 +100,7 @@ impl TrainingBackend for MlxTuneBackend {
                     lines.push(line);
                 }
                 lines
-            }))
-        } else {
-            None
-        };
+            }));
 
         // Parse stdout progress lines
         let mut last_loss = 0.0f32;
@@ -317,5 +312,5 @@ fn write_chat_jsonl(path: &Path, samples: &[crate::corpus::sample::Sample]) -> R
             output.push('\n');
         }
     }
-    std::fs::write(path, output).map_err(|e| TrainingError::Io(e))
+    std::fs::write(path, output).map_err(TrainingError::Io)
 }

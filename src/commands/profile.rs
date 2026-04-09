@@ -205,7 +205,7 @@ fn compute_profile_info(name: &str, active: bool) -> Result<ProfileInfo, AppErro
             }
         }
 
-        for sentence in content.split(|c: char| matches!(c, '.' | '!' | '?')) {
+        for sentence in content.split(['.', '!', '?']) {
             let len = sentence.split_whitespace().count();
             if len > 0 {
                 sentence_lengths.push(len);
