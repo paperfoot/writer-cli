@@ -276,6 +276,22 @@ We argue that recovering and preserving individual voice is a legitimate goal fo
 
 ---
 
+### 7.4 Style as Distribution, Not Target
+
+A critical subtlety that our current system under-addresses: an author's voice is not a set of fixed targets but a *distribution* over stylometric features that varies with context. Adams writes 6.8-word sentences on average, but with a standard deviation of 4.3 — he mixes very short fragments with longer flowing passages. A system that penalises every sentence over 10 words would produce choppy, uniform text that is *less* like Adams, not more.
+
+Recent work in personalised generation has moved from feature-matching to distribution-matching:
+
+- **TinyStyler** (Horvitz et al., EMNLP 2024 Findings) conditions generation on authorship embeddings (dense vectors encoding the target style) rather than explicit stylometric rules. An 800M-parameter model conditioned on LUAR-style embeddings outperformed GPT-4 on authorship transfer tasks, suggesting that learned style representations capture distributional nuances that hand-crafted features miss.
+
+- **StyleDistance** (Patel et al., NAACL 2025) addresses content-style entanglement by training embeddings on synthetic paraphrases with controlled style variations across 40 dimensions. Their key insight is that style must be measured independently of content — our fingerprint partially achieves this (function words and punctuation are content-independent), but features like vocabulary richness are conflated with topic.
+
+- **Authorship Style Transfer with Policy Optimization** (Liu et al., 2024) uses RL with a style classifier as the reward signal, rather than matching individual metrics. The reward is holistic — "does a classifier think this was written by the target author?" — which naturally captures the interaction between features.
+
+The implication for our system is clear: the stylometric fingerprint should evolve from a scoring function into a *reward signal* for training. Rather than filtering candidates by distance to target means, we should train a lightweight style classifier on the fingerprint features, then use it as a reward model for DPO or PPO. This allows the model to learn *when* Adams writes short sentences and *when* he writes longer ones — the conditional distribution, not the marginal.
+
+---
+
 ## 8. Conclusion
 
 We have presented *writer*, an open-source system for voice-faithful text generation that combines stylometric fingerprinting with LoRA fine-tuning and quality-ranked decoding. On a case study of Douglas Adams, the system closes 35% of the gap between generic LLM output and the target voice, with clear paths to improvement through syntactic features, activation steering, and contrastive decoding.
@@ -314,9 +330,15 @@ Eder, M. & Rybicki, J. (2022). Universal Dependencies and Authorship Attribution
 
 Habib, R., et al. (2025). A Comprehensive Survey on Authorship Attribution: Methods, Features, and Evaluation. *Information Processing & Management*.
 
+Horvitz, Z., Patel, A., Singh, K., Callison-Burch, C., McKeown, K., & Yu, Z. (2024). TinyStyler: Efficient Few-Shot Text Style Transfer with Authorship Embeddings. *Findings of EMNLP 2024*.
+
 Ionio Research (2026). Author-Style Steering via Contrastive Activation Vectors. Technical report.
 
 Li, X.L., Holtzman, A., Fried, D., Liang, P., Eisner, J., Hashimoto, T., Zettlemoyer, L., & Lewis, M. (2023). Contrastive Decoding: Open-ended Text Generation as Optimization. *ACL 2023*.
+
+Liu, S., Agarwal, S., & May, J. (2024). Authorship Style Transfer with Policy Optimization. *arXiv:2403.08043*.
+
+Patel, A., Zhu, J., Qiu, J., Horvitz, Z., Apidianaki, M., McKeown, K., & Callison-Burch, C. (2025). StyleDistance: Stronger Content-Independent Style Embeddings with Synthetic Parallel Examples. *NAACL 2025*.
 
 Mendenhall, T.C. (1887). The Characteristic Curves of Composition. *Science, 9*(214), 237–249.
 
