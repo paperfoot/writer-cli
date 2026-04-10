@@ -62,6 +62,12 @@ pub enum Commands {
         /// Include model, timing, and quality details in JSON output
         #[arg(long, short = 'v')]
         verbose: bool,
+
+        /// Raw mode: disable system_prompt and write_prompt wrapping.
+        /// Sends the prompt verbatim and skips chat template in MLX.
+        /// Used for evaluation and ablation experiments.
+        #[arg(long)]
+        raw: bool,
     },
 
     /// Rewrite a file in the active voice
@@ -71,6 +77,44 @@ pub enum Commands {
         /// Write changes in place instead of printing to stdout
         #[arg(long)]
         in_place: bool,
+    },
+
+    /// Evaluate style fidelity across prompts, seeds, and configurations
+    EvalStyle {
+        /// Path to YAML prompt suite file
+        #[arg(long, default_value = "prompts.yaml")]
+        suite: std::path::PathBuf,
+
+        /// Number of seeds (generations) per prompt
+        #[arg(long, default_value = "4")]
+        seeds: u16,
+
+        /// Path to adapter directory (overrides auto-detection)
+        #[arg(long)]
+        adapter: Option<std::path::PathBuf>,
+
+        /// Run in raw mode (no system prompt, no prompt wrapping, no chat template)
+        #[arg(long)]
+        raw: bool,
+
+        /// Output directory for JSON/CSV results
+        #[arg(long, short = 'o', default_value = "eval_results")]
+        output: std::path::PathBuf,
+    },
+
+    /// Extract canon lexicon (named entities + high-PMI terms) from corpus
+    BuildLexicon {
+        /// Profile to extract from (defaults to active)
+        #[arg(long)]
+        profile: Option<String>,
+
+        /// Minimum word count for a term to be included
+        #[arg(long, default_value = "3")]
+        min_count: usize,
+
+        /// Maximum terms to include
+        #[arg(long, default_value = "200")]
+        max_terms: usize,
     },
 
     /// Manage base models

@@ -65,8 +65,14 @@ async fn main() {
             ProfileAction::New { name } => commands::profile::new_profile(ctx, name),
         },
         Commands::Train { profile } => commands::train::run(ctx, profile).await,
-        Commands::Write { prompt, max_tokens, candidates, verbose } => {
-            commands::write::run(ctx, prompt, max_tokens, candidates, verbose).await
+        Commands::Write { prompt, max_tokens, candidates, verbose, raw } => {
+            commands::write::run(ctx, prompt, max_tokens, candidates, verbose, raw).await
+        }
+        Commands::EvalStyle { suite, seeds, adapter, raw, output } => {
+            commands::eval_style::run(ctx, suite, seeds, adapter, raw, output).await
+        }
+        Commands::BuildLexicon { profile, min_count, max_terms } => {
+            commands::build_lexicon::run(ctx, profile, min_count, max_terms)
         }
         Commands::Rewrite { file, in_place } => {
             commands::rewrite::run(ctx, file, in_place).await

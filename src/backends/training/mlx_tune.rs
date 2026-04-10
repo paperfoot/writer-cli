@@ -65,8 +65,8 @@ impl TrainingBackend for MlxTuneBackend {
         let model_name = resolve_mlx_model(&config.base_model);
 
         // Run mlx_lm.lora
-        let mut child = tokio::process::Command::new(&self.mlx_lm_path)
-            .arg("--train")
+        let mut cmd = tokio::process::Command::new(&self.mlx_lm_path);
+        cmd.arg("--train")
             .arg("--model")
             .arg(&model_name)
             .arg("--data")
@@ -80,7 +80,13 @@ impl TrainingBackend for MlxTuneBackend {
             .arg("--learning-rate")
             .arg(config.learning_rate.to_string())
             .arg("--max-seq-length")
-            .arg(config.max_seq_len.to_string())
+            .arg(config.max_seq_len.to_string());
+
+        if config.mask_prompt {
+            cmd.arg("--mask-prompt");
+        }
+
+        let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -211,12 +217,17 @@ fn parse_progress_line(line: &str, total_steps: u32) -> Option<TrainingProgress>
     })
 }
 
-/// Prepare training data in mlx-lm chat format.
-/// Each line is: {"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
+/// Prepare training data in the configured dataset format.
+///
+/// Formats (per mlx-lm LORA.md):
+/// - chat: {"messages": [{role, content}, ...]} — uses chat template
+/// - completions: {"prompt": "...", "completion": "..."} — supports mask_prompt
+/// - text: {"text": "..."} — raw continuation, fully custom formatting
 pub fn prepare_training_data(
     corpus_jsonl: &Path,
     output_dir: &Path,
     holdout_ratio: f64,
+    format: crate::config::DatasetFormat,
 ) -> Result<(usize, usize), TrainingError> {
     use crate::corpus::sample::Sample;
 
@@ -240,12 +251,15 @@ pub fn prepare_training_data(
 
     std::fs::create_dir_all(output_dir)?;
 
-    // Write train.jsonl
-    write_chat_jsonl(&output_dir.join("train.jsonl"), train_samples)?;
-    // Write valid.jsonl
-    write_chat_jsonl(&output_dir.join("valid.jsonl"), valid_samples)?;
-    // Write test.jsonl (same as valid for now)
-    write_chat_jsonl(&output_dir.join("test.jsonl"), valid_samples)?;
+    let writer_fn: fn(&Path, &[Sample]) -> Result<(), TrainingError> = match format {
+        crate::config::DatasetFormat::Chat => write_chat_jsonl,
+        crate::config::DatasetFormat::Completions => write_completion_jsonl,
+        crate::config::DatasetFormat::Text => write_text_jsonl,
+    };
+
+    writer_fn(&output_dir.join("train.jsonl"), train_samples)?;
+    writer_fn(&output_dir.join("valid.jsonl"), valid_samples)?;
+    writer_fn(&output_dir.join("test.jsonl"), valid_samples)?;
 
     Ok((train_samples.len(), valid_samples.len()))
 }
@@ -287,7 +301,6 @@ fn resolve_mlx_model(model_id: &crate::backends::types::ModelId) -> String {
 fn write_chat_jsonl(path: &Path, samples: &[crate::corpus::sample::Sample]) -> Result<(), TrainingError> {
     let mut output = String::new();
     for sample in samples {
-        // Create a completion-style example: user asks to write, assistant produces the text
         let context = sample
             .metadata
             .context_tag
@@ -313,4 +326,56 @@ fn write_chat_jsonl(path: &Path, samples: &[crate::corpus::sample::Sample]) -> R
         }
     }
     std::fs::write(path, output).map_err(TrainingError::Io)
+}
+
+/// Completions format: {"prompt": "...", "completion": "..."}
+/// Supports mask_prompt in mlx-lm to train only on the completion portion.
+fn write_completion_jsonl(path: &Path, samples: &[crate::corpus::sample::Sample]) -> Result<(), TrainingError> {
+    let mut output = String::new();
+    for sample in samples {
+        let context = sample
+            .metadata
+            .context_tag
+            .as_deref()
+            .unwrap_or("longform");
+
+        let example = CompletionExample {
+            prompt: format!("Write a {context} passage in your natural voice.\n\n"),
+            completion: sample.content.clone(),
+        };
+
+        if let Ok(line) = serde_json::to_string(&example) {
+            output.push_str(&line);
+            output.push('\n');
+        }
+    }
+    std::fs::write(path, output).map_err(TrainingError::Io)
+}
+
+/// Text format: {"text": "..."} — raw continuation, no chat wrapping.
+/// mlx-lm treats this as pure language modeling with no template applied.
+fn write_text_jsonl(path: &Path, samples: &[crate::corpus::sample::Sample]) -> Result<(), TrainingError> {
+    let mut output = String::new();
+    for sample in samples {
+        let example = TextExample {
+            text: sample.content.clone(),
+        };
+
+        if let Ok(line) = serde_json::to_string(&example) {
+            output.push_str(&line);
+            output.push('\n');
+        }
+    }
+    std::fs::write(path, output).map_err(TrainingError::Io)
+}
+
+#[derive(Serialize)]
+struct CompletionExample {
+    prompt: String,
+    completion: String,
+}
+
+#[derive(Serialize)]
+struct TextExample {
+    text: String,
 }

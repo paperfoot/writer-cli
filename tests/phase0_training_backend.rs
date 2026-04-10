@@ -53,6 +53,7 @@ async fn fake_trainer_produces_artefact() {
         batch_size: 4,
         max_steps: 1000,
         max_seq_len: 4096,
+        mask_prompt: false,
     };
 
     let noop = |_p: TrainingProgress| {};

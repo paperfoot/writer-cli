@@ -1,5 +1,7 @@
 pub mod agent_info;
+pub mod build_lexicon;
 pub mod config;
+pub mod eval_style;
 pub mod init;
 pub mod learn;
 pub mod model;

@@ -20,6 +20,9 @@ pub struct LoraConfig {
     pub batch_size: u16,
     pub max_steps: u32,
     pub max_seq_len: u32,
+    /// When true, mask prompt tokens during training so the model
+    /// only learns from the completion/assistant portion.
+    pub mask_prompt: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

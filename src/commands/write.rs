@@ -54,6 +54,7 @@ pub async fn run(
     max_tokens_override: Option<u32>,
     candidates_override: Option<u16>,
     verbose: bool,
+    raw: bool,
 ) -> Result<(), AppError> {
     let mut cfg = config::load()?;
 
@@ -113,14 +114,29 @@ pub async fn run(
         StylometricFingerprint::default()
     };
 
-    // Build system prompt with stylometric priming
-    let system = if fingerprint.word_count > 0 {
+    // In raw mode: no system prompt, no prompt wrapping, raw prompt_mode for MLX
+    let system = if raw {
+        None
+    } else if fingerprint.word_count > 0 {
         Some(prompts::system_prompt(&fingerprint))
     } else {
         None
     };
 
-    let write_prompt = prompts::write_prompt(&prompt);
+    let write_prompt = if raw {
+        prompt.clone()
+    } else {
+        prompts::write_prompt(&prompt)
+    };
+
+    let prompt_mode = if raw {
+        Some("raw".to_string())
+    } else {
+        match cfg.inference.prompt_mode {
+            writer_cli::config::PromptMode::Raw => Some("raw".to_string()),
+            writer_cli::config::PromptMode::Chat => None,
+        }
+    };
 
     // Run through decoding pipeline (adapter is passed via the request)
     let result = decoding::run(
@@ -132,6 +148,7 @@ pub async fn run(
         &write_prompt,
         system.as_deref(),
         adapter.as_ref(),
+        prompt_mode.as_deref(),
     )
     .await
     .map_err(|e| AppError::Transient(e.to_string()))?;

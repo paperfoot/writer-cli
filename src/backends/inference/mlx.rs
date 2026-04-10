@@ -29,10 +29,13 @@ struct MlxRequest {
     prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     system_prompt: Option<String>,
+    prompt_mode: String,
     max_tokens: u32,
     temperature: f32,
     top_p: f32,
     repetition_penalty: f32,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    logit_bias: std::collections::HashMap<String, f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,10 +130,12 @@ impl MlxBackend {
             adapter_path: adapter_path.map(|p| p.to_string_lossy().to_string()),
             prompt: request.prompt.clone(),
             system_prompt: request.system_prompt.clone(),
+            prompt_mode: request.prompt_mode.clone().unwrap_or_else(|| "chat".to_string()),
             max_tokens: request.params.max_tokens,
             temperature: request.params.temperature,
             top_p: request.params.top_p,
             repetition_penalty: request.params.repetition_penalty,
+            logit_bias: request.logit_bias.clone(),
         };
 
         let input_json =
@@ -212,7 +217,7 @@ impl InferenceBackend for MlxBackend {
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             supports_lora: true,
-            supports_logit_bias: false,
+            supports_logit_bias: true,
             supports_contrastive_decoding: false,
             supports_speculative_decoding: false,
             supports_activation_steering: false,

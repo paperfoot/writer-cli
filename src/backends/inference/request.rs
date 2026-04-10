@@ -22,6 +22,9 @@ pub struct GenerationRequest {
     pub logit_bias: LogitBiasMap,
     pub stop_sequences: Vec<String>,
     pub system_prompt: Option<String>,
+    /// "chat" (default) or "raw". In raw mode the MLX bridge skips
+    /// chat template formatting and sends the prompt verbatim.
+    pub prompt_mode: Option<String>,
     pub draft_model: Option<ModelId>,
     pub contrastive_base: Option<ModelId>,
 }
@@ -36,6 +39,7 @@ impl GenerationRequest {
             logit_bias: HashMap::new(),
             stop_sequences: Vec::new(),
             system_prompt: None,
+            prompt_mode: None,
             draft_model: None,
             contrastive_base: None,
         }

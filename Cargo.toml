@@ -41,6 +41,7 @@ hdrhistogram = "7"
 unicode-segmentation = "1"
 regex = "1"
 shellexpand = "3"
+serde_yaml = "0.9.34"
 
 [dev-dependencies]
 assert_cmd = "2"

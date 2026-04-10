@@ -61,16 +61,18 @@ fn toml_serialize(config: &AppConfig) -> Result<String, AppError> {
     Ok(format!(
         "active_profile = \"{}\"\nbase_model = \"{}\"\n\n\
          [update]\nenabled = {}\nowner = \"{}\"\nrepo = \"{}\"\n\n\
-         [inference]\nbackend = \"{}\"\ntemperature = {}\nmax_tokens = {}\nollama_url = \"{}\"\n\n\
-         [decoding]\nn_candidates = {}\ncontrastive_enabled = {}\ncontrastive_alpha = {}\nbanned_word_bias = {}\npreferred_word_bias = {}\nkv_quant = \"{}\"\n\n\
-         [training]\nbackend = \"{}\"\nrank = {}\nalpha = {}\nlearning_rate = {}\nbatch_size = {}\nmax_steps = {}\nmax_seq_len = {}\n",
+         [inference]\nbackend = \"{}\"\ntemperature = {}\nmax_tokens = {}\nollama_url = \"{}\"\nprompt_mode = \"{:?}\"\n\n\
+         [decoding]\nn_candidates = {}\ncontrastive_alpha = {}\nbanned_word_bias = {}\npreferred_word_bias = {}\nkv_quant = \"{}\"\n\n\
+         [training]\nbackend = \"{}\"\nrank = {}\nalpha = {}\nlearning_rate = {}\nbatch_size = {}\nmax_steps = {}\nmax_seq_len = {}\ndataset_format = \"{:?}\"\nmask_prompt = {}\n",
         config.active_profile,
         config.base_model,
         config.update.enabled, config.update.owner, config.update.repo,
-        config.inference.backend, config.inference.temperature, config.inference.max_tokens, config.inference.ollama_url,
-        config.decoding.n_candidates, config.decoding.contrastive_enabled, config.decoding.contrastive_alpha,
+        config.inference.backend, config.inference.temperature, config.inference.max_tokens,
+        config.inference.ollama_url, config.inference.prompt_mode,
+        config.decoding.n_candidates, config.decoding.contrastive_alpha,
         config.decoding.banned_word_bias, config.decoding.preferred_word_bias, config.decoding.kv_quant,
         config.training.backend, config.training.rank, config.training.alpha,
-        config.training.learning_rate, config.training.batch_size, config.training.max_steps, config.training.max_seq_len,
+        config.training.learning_rate, config.training.batch_size, config.training.max_steps,
+        config.training.max_seq_len, config.training.dataset_format, config.training.mask_prompt,
     ))
 }

@@ -32,13 +32,18 @@ pub struct InferenceConfig {
     pub temperature: f32,
     pub max_tokens: u32,
     pub ollama_url: String,
+    /// Prompt mode for inference: "chat" (default) or "raw".
+    /// In raw mode, mlx_generate.py bypasses chat template and sends prompt verbatim.
+    pub prompt_mode: PromptMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecodingConfig {
     pub n_candidates: u16,
     pub max_tokens: u32,
-    pub contrastive_enabled: bool,
+    /// Contrastive alpha for CoPe-style decoding. Set to 0.0 to disable.
+    /// Requires a contrastive_base model to be specified in generation request.
+    /// Currently only supported by Ollama backend.
     pub contrastive_alpha: f32,
     pub banned_word_bias: f32,
     pub preferred_word_bias: f32,
@@ -54,6 +59,31 @@ pub struct TrainingConfig {
     pub batch_size: u16,
     pub max_steps: u32,
     pub max_seq_len: u32,
+    /// Dataset format for LoRA training: "chat", "completions", or "text".
+    /// - chat: {"messages": [{role, content}, ...]} — current default
+    /// - completions: {"prompt": "...", "completion": "..."} — supports mask_prompt
+    /// - text: {"text": "..."} — raw continuation, fully custom formatting
+    pub dataset_format: DatasetFormat,
+    /// When true and dataset_format is completions or chat, mask the prompt
+    /// tokens so the model only learns from the completion/assistant turn.
+    pub mask_prompt: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DatasetFormat {
+    #[default]
+    Chat,
+    Completions,
+    Text,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptMode {
+    #[default]
+    Chat,
+    Raw,
 }
 
 impl Default for AppConfig {
@@ -86,6 +116,7 @@ impl Default for InferenceConfig {
             temperature: 0.7,
             max_tokens: 2048,
             ollama_url: "http://localhost:11434".into(),
+            prompt_mode: PromptMode::default(),
         }
     }
 }
@@ -95,8 +126,7 @@ impl Default for DecodingConfig {
         Self {
             n_candidates: 8,
             max_tokens: 4096,
-            contrastive_enabled: true,
-            contrastive_alpha: 0.3,
+            contrastive_alpha: 0.0, // disabled until contrastive_base model is wired
             banned_word_bias: -4.0,
             preferred_word_bias: 1.5,
             kv_quant: "auto".into(),
@@ -117,6 +147,8 @@ impl Default for TrainingConfig {
             batch_size: 1,
             max_steps: 500,
             max_seq_len: 2048,
+            dataset_format: DatasetFormat::default(),
+            mask_prompt: false,
         }
     }
 }

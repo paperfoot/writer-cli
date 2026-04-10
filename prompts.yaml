@@ -1,0 +1,39 @@
+# Style evaluation prompt suite for writer CLI
+# Used by: writer eval-style --suite prompts.yaml
+name: "core-ablation-v1"
+
+prompts:
+  # Portability tests: topics far from the training corpus
+  - text: "Write a short passage about the experience of arriving at a new airport for the first time."
+    category: travel
+
+  - text: "Describe what it feels like to debug a particularly frustrating piece of code at 2am."
+    category: technology
+
+  - text: "Write about the strange comfort of eating breakfast alone in a hotel restaurant."
+    category: personal
+
+  - text: "Explain why most meetings could have been an email."
+    category: business
+
+  - text: "Describe the moment you realize a restaurant is going to be disappointing."
+    category: personal
+
+  # Canon proximity tests: topics that overlap with training corpus
+  # (for leakage detection — should carry voice but NOT canon content)
+  - text: "Write about the absurdity of modern bureaucracy."
+    category: canon-adjacent
+
+  - text: "Describe the feeling of being hopelessly lost while trying to follow directions."
+    category: canon-adjacent
+
+  - text: "Write about the fundamental improbability of anything working as intended."
+    category: canon-adjacent
+
+  # Long-form test
+  - text: "Write a 300-word essay about why humans are terrible at estimating how long things will take."
+    category: longform
+
+  # Short-form test
+  - text: "In two sentences, describe the taste of cheap coffee."
+    category: shortform

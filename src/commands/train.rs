@@ -36,8 +36,9 @@ pub async fn run(ctx: Ctx, profile: Option<String>) -> Result<(), AppError> {
 
     // Prepare training data
     let train_data_dir = profile_dir.join("training_data");
-    let (n_train, n_valid) = mlx_tune::prepare_training_data(&corpus_path, &train_data_dir, 0.1)
-        .map_err(|e| AppError::Transient(e.to_string()))?;
+    let (n_train, n_valid) =
+        mlx_tune::prepare_training_data(&corpus_path, &train_data_dir, 0.1, cfg.training.dataset_format)
+            .map_err(|e| AppError::Transient(e.to_string()))?;
 
     if !ctx.format.is_json() {
         use owo_colors::OwoColorize;
@@ -68,6 +69,7 @@ pub async fn run(ctx: Ctx, profile: Option<String>) -> Result<(), AppError> {
         batch_size: cfg.training.batch_size,
         max_steps: cfg.training.max_steps,
         max_seq_len: cfg.training.max_seq_len,
+        mask_prompt: cfg.training.mask_prompt,
     };
 
     // Create backend

@@ -59,6 +59,7 @@ pub async fn run(
     prompt: &str,
     system_prompt: Option<&str>,
     adapter: Option<&AdapterRef>,
+    prompt_mode: Option<&str>,
 ) -> Result<GenerationResult, DecodingError> {
     let max_attempts = 3;
 
@@ -77,6 +78,10 @@ pub async fn run(
 
         if let Some(sys) = system_prompt {
             req.system_prompt = Some(sys.to_string());
+        }
+
+        if let Some(mode) = prompt_mode {
+            req.prompt_mode = Some(mode.to_string());
         }
 
         // Generate candidates
