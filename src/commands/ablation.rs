@@ -16,7 +16,6 @@ use writer_cli::backends::types::ModelId;
 use writer_cli::config::DatasetFormat;
 use writer_cli::decoding;
 use writer_cli::decoding::prompts;
-use writer_cli::stylometry::features::lengths;
 use writer_cli::stylometry::features::punctuation::PunctuationStats;
 use writer_cli::stylometry::features::readability::ReadabilityStats;
 use writer_cli::stylometry::fingerprint::StylometricFingerprint;
@@ -262,6 +261,15 @@ pub async fn run(
     let suite: PromptSuite = serde_yaml::from_str(&suite_content)
         .map_err(|e| AppError::InvalidInput(format!("Invalid YAML: {e}")))?;
 
+    // Progress tracking
+    let total_gens = ABLATION_CONFIGS.len() * INFERENCE_MODES.len() * suite.prompts.len() * seeds as usize;
+    let progress_path = output_dir.join("progress.log");
+    let mut completed_gens: usize = 0;
+    let eval_start = std::time::Instant::now();
+
+    // Write initial progress
+    write_progress(&progress_path, 0, total_gens, 0.0, "starting evaluation", "")?;
+
     // Create MLX backend
     let mlx_backend = MlxBackend::new().map_err(|e| AppError::Transient(e.to_string()))?;
     let handle = mlx_backend
@@ -276,17 +284,18 @@ pub async fn run(
         );
 
         for inf_mode in INFERENCE_MODES {
+            let combo_name = format!("{} + {}", ablation_cfg.name, inf_mode.name);
             if !ctx.format.is_json() {
-                eprint!(
-                    "  {} + {} ... ",
-                    ablation_cfg.name, inf_mode.name
+                eprintln!(
+                    "  evaluating: {}",
+                    combo_name,
                 );
             }
 
             let mut records: Vec<EvalRecord> = Vec::new();
 
-            for prompt_entry in &suite.prompts {
-                for _seed in 0..seeds {
+            for (pi, prompt_entry) in suite.prompts.iter().enumerate() {
+                for seed in 0..seeds {
                     let system = if inf_mode.raw {
                         None
                     } else if fingerprint.word_count > 0 {
@@ -303,6 +312,8 @@ pub async fn run(
 
                     let prompt_mode = if inf_mode.raw { Some("raw") } else { None };
 
+                    let gen_start = std::time::Instant::now();
+
                     let result = decoding::run(
                         &mlx_backend,
                         &handle,
@@ -316,12 +327,50 @@ pub async fn run(
                     )
                     .await;
 
-                    if let Ok(r) = result {
-                        let _sent_stats = lengths::sentence_lengths(&r.text);
+                    completed_gens += 1;
+                    let gen_elapsed = gen_start.elapsed().as_secs();
+                    let total_elapsed = eval_start.elapsed().as_secs_f64();
+                    let avg_per_gen = if completed_gens > 0 {
+                        total_elapsed / completed_gens as f64
+                    } else {
+                        0.0
+                    };
+                    let remaining = (total_gens - completed_gens) as f64 * avg_per_gen;
+
+                    let status = format!(
+                        "prompt {}/{} seed {}/{}",
+                        pi + 1,
+                        suite.prompts.len(),
+                        seed + 1,
+                        seeds,
+                    );
+
+                    write_progress(
+                        &progress_path,
+                        completed_gens,
+                        total_gens,
+                        remaining,
+                        &combo_name,
+                        &status,
+                    )?;
+
+                    if let Ok(r) = &result {
                         let punct = PunctuationStats::compute(&r.text);
                         let read = ReadabilityStats::compute(&r.text);
                         let canon_leakage =
                             compute_canon_leakage(&r.text, &prompt_entry.text, &leakage_lexicon);
+
+                        if !ctx.format.is_json() {
+                            eprintln!(
+                                "    [{}/{}] {}s dist={:.3} leak={:.3} | ETA {:.0}m",
+                                completed_gens,
+                                total_gens,
+                                gen_elapsed,
+                                r.distance,
+                                canon_leakage,
+                                remaining / 60.0,
+                            );
+                        }
 
                         records.push(EvalRecord {
                             style_distance: r.distance,
@@ -330,6 +379,11 @@ pub async fn run(
                             exclamations_per_1k: punct.exclamations_per_1k,
                             canon_leakage_score: canon_leakage,
                         });
+                    } else if !ctx.format.is_json() {
+                        eprintln!(
+                            "    [{}/{}] FAILED | ETA {:.0}m",
+                            completed_gens, total_gens, remaining / 60.0,
+                        );
                     }
                 }
             }
@@ -508,6 +562,29 @@ fn compute_canon_leakage(output: &str, prompt: &str, lexicon: &[String]) -> f64 
     }
 
     leaked as f64 / checkable as f64
+}
+
+/// Write a machine-readable progress file that can be tailed/polled externally.
+/// Format: single JSON object, overwritten on every generation.
+fn write_progress(
+    path: &Path,
+    completed: usize,
+    total: usize,
+    eta_seconds: f64,
+    combo: &str,
+    status: &str,
+) -> Result<(), AppError> {
+    let pct = if total > 0 {
+        (completed as f64 / total as f64 * 100.0).round()
+    } else {
+        0.0
+    };
+    let eta_min = (eta_seconds / 60.0).round();
+    let content = format!(
+        "{{\n  \"completed\": {},\n  \"total\": {},\n  \"percent\": {},\n  \"eta_minutes\": {},\n  \"current_combo\": \"{}\",\n  \"status\": \"{}\"\n}}\n",
+        completed, total, pct, eta_min, combo, status,
+    );
+    std::fs::write(path, content).map_err(AppError::Io)
 }
 
 fn read_adapter_loss(adapter_dir: &Path) -> Option<f32> {
