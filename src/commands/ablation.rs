@@ -70,18 +70,61 @@ const INFERENCE_MODES: &[InferenceMode] = &[
 
 // ── Result types ──────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize)]
-struct AblationResult {
+/// Per-generation record — written to per_generation.jsonl
+#[derive(Debug, Clone, Serialize)]
+struct GenerationRecord {
     training_format: String,
     inference_mode: String,
+    prompt: String,
+    category: String,
+    seed: u16,
+    rng_seed: u64,
+    status: String, // "ok" or "failed"
+    error: Option<String>,
+    text: Option<String>,
+    style_distance: Option<f64>,
+    base_voice_distance: Option<f64>,
+    fk_grade: Option<f64>,
+    questions_per_1k: Option<f64>,
+    exclamations_per_1k: Option<f64>,
+    terminal_punct_dist: Option<f64>,
+    structural_punct_dist: Option<f64>,
+    slop_score: Option<f64>,
+    slop_multiplier: Option<f64>,
+    canon_leakage_score: Option<f64>,
+    leaked_terms: Option<Vec<String>>,
+    word_count: Option<usize>,
+    sentence_count: Option<usize>,
+    elapsed_ms: Option<u64>,
+}
+
+/// Bucket-level statistics
+#[derive(Debug, Clone, Serialize)]
+struct BucketStats {
+    bucket: String,
+    count: usize,
+    failed: usize,
     mean_style_distance: f64,
     median_style_distance: f64,
-    mean_fk_grade: f64,
+    variance_style_distance: f64,
+    mean_canon_leakage: f64,
+    worst_canon_leakage: f64,
     mean_questions_per_1k: f64,
     mean_exclamations_per_1k: f64,
-    mean_canon_leakage: f64,
-    generations: usize,
+    mean_fk_grade: f64,
+}
+
+/// Per-combination summary with bucket breakdowns
+#[derive(Debug, Serialize)]
+struct ComboResult {
+    training_format: String,
+    inference_mode: String,
     final_loss: f32,
+    total: usize,
+    succeeded: usize,
+    failed: usize,
+    overall: BucketStats,
+    buckets: std::collections::BTreeMap<String, BucketStats>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,9 +132,17 @@ struct AblationSummary {
     configs_tested: usize,
     inference_modes: usize,
     total_combinations: usize,
-    best_combination: String,
-    best_style_distance: f64,
-    results: Vec<AblationResult>,
+    winner: WinnerReport,
+    results: Vec<ComboResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct WinnerReport {
+    combination: String,
+    gate_passed: String,
+    off_domain_leakage: f64,
+    overall_style_distance: f64,
+    reasoning: Vec<String>,
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────
@@ -164,7 +215,8 @@ pub async fn run(
         println!();
     }
 
-    let mut all_results: Vec<AblationResult> = Vec::new();
+    let mut all_results: Vec<ComboResult> = Vec::new();
+    let mut all_gen_records: Vec<GenerationRecord> = Vec::new();
 
     // Phase 1: Train adapters (unless eval_only)
     let mut trained_adapters: Vec<(AblationConfig, PathBuf, f32)> = Vec::new();
@@ -304,9 +356,12 @@ pub async fn run(
                 );
             }
 
-            let mut records: Vec<EvalRecord> = Vec::new();
+            let mut gen_records: Vec<GenerationRecord> = Vec::new();
 
             for (pi, prompt_entry) in suite.prompts.iter().enumerate() {
+                // Normalize bucket: anything not canon-adjacent/longform/shortform → off-domain
+                let bucket = normalize_bucket(&prompt_entry.category);
+
                 for seed in 0..seeds {
                     let system = if inf_mode.raw {
                         None
@@ -323,10 +378,7 @@ pub async fn run(
                     };
 
                     let prompt_mode = if inf_mode.raw { Some("raw") } else { None };
-
-                    // Deterministic seed: same prompt+seed pair across all combos
                     let rng_seed = (pi as u64) * 1000 + seed as u64 + 42;
-
                     let gen_start = std::time::Instant::now();
 
                     let result = decoding::run(
@@ -344,167 +396,144 @@ pub async fn run(
                     .await;
 
                     completed_gens += 1;
-                    let gen_elapsed = gen_start.elapsed().as_secs();
+                    let gen_elapsed_ms = gen_start.elapsed().as_millis() as u64;
                     let total_elapsed = eval_start.elapsed().as_secs_f64();
-                    let avg_per_gen = if completed_gens > 0 {
-                        total_elapsed / completed_gens as f64
-                    } else {
-                        0.0
-                    };
+                    let avg_per_gen = if completed_gens > 0 { total_elapsed / completed_gens as f64 } else { 0.0 };
                     let remaining = (total_gens - completed_gens) as f64 * avg_per_gen;
 
-                    let status = format!(
-                        "prompt {}/{} seed {}/{}",
-                        pi + 1,
-                        suite.prompts.len(),
-                        seed + 1,
-                        seeds,
-                    );
+                    write_progress(&progress_path, completed_gens, total_gens, remaining, &combo_name,
+                        &format!("prompt {}/{} seed {}/{}", pi + 1, suite.prompts.len(), seed + 1, seeds))?;
 
-                    write_progress(
-                        &progress_path,
-                        completed_gens,
-                        total_gens,
-                        remaining,
-                        &combo_name,
-                        &status,
-                    )?;
+                    let record = match &result {
+                        Ok(r) => {
+                            let punct = PunctuationStats::compute(&r.text);
+                            let read = ReadabilityStats::compute(&r.text);
+                            let dist_report = writer_cli::stylometry::scoring::distance(&r.text, &fingerprint);
+                            let leakage = compute_canon_leakage(&r.text, &prompt_entry.text, &leakage_lexicon);
+                            let wc = r.text.split_whitespace().count();
+                            let sc = r.text.split_terminator(['.', '!', '?']).count();
 
-                    if let Ok(r) = &result {
-                        let punct = PunctuationStats::compute(&r.text);
-                        let read = ReadabilityStats::compute(&r.text);
-                        let canon_leakage =
-                            compute_canon_leakage(&r.text, &prompt_entry.text, &leakage_lexicon);
+                            if !ctx.format.is_json() {
+                                eprintln!("    [{}/{}] {:.0}s dist={:.3} leak={:.3} | ETA {:.0}m",
+                                    completed_gens, total_gens, gen_elapsed_ms as f64 / 1000.0,
+                                    r.distance, leakage.score, remaining / 60.0);
+                            }
 
-                        if !ctx.format.is_json() {
-                            eprintln!(
-                                "    [{}/{}] {}s dist={:.3} leak={:.3} | ETA {:.0}m",
-                                completed_gens,
-                                total_gens,
-                                gen_elapsed,
-                                r.distance,
-                                canon_leakage,
-                                remaining / 60.0,
-                            );
+                            GenerationRecord {
+                                training_format: ablation_cfg.name.to_string(),
+                                inference_mode: inf_mode.name.to_string(),
+                                prompt: prompt_entry.text.clone(),
+                                category: bucket.clone(),
+                                seed,
+                                rng_seed,
+                                status: "ok".to_string(),
+                                error: None,
+                                text: Some(r.text.clone()),
+                                style_distance: Some(r.distance),
+                                base_voice_distance: Some(dist_report.base_voice_distance),
+                                fk_grade: Some(read.flesch_kincaid_grade),
+                                questions_per_1k: Some(punct.questions_per_1k),
+                                exclamations_per_1k: Some(punct.exclamations_per_1k),
+                                terminal_punct_dist: Some(dist_report.terminal_punct_dist),
+                                structural_punct_dist: Some(dist_report.structural_punct_dist),
+                                slop_score: Some(dist_report.slop_score),
+                                slop_multiplier: Some(dist_report.slop_multiplier),
+                                canon_leakage_score: Some(leakage.score),
+                                leaked_terms: Some(leakage.leaked_terms),
+                                word_count: Some(wc),
+                                sentence_count: Some(sc),
+                                elapsed_ms: Some(gen_elapsed_ms),
+                            }
                         }
+                        Err(e) => {
+                            if !ctx.format.is_json() {
+                                eprintln!("    [{}/{}] FAILED: {} | ETA {:.0}m",
+                                    completed_gens, total_gens, e, remaining / 60.0);
+                            }
+                            GenerationRecord {
+                                training_format: ablation_cfg.name.to_string(),
+                                inference_mode: inf_mode.name.to_string(),
+                                prompt: prompt_entry.text.clone(),
+                                category: bucket.clone(),
+                                seed,
+                                rng_seed,
+                                status: "failed".to_string(),
+                                error: Some(e.to_string()),
+                                text: None, style_distance: None, base_voice_distance: None,
+                                fk_grade: None, questions_per_1k: None, exclamations_per_1k: None,
+                                terminal_punct_dist: None, structural_punct_dist: None,
+                                slop_score: None, slop_multiplier: None,
+                                canon_leakage_score: None, leaked_terms: None,
+                                word_count: None, sentence_count: None,
+                                elapsed_ms: Some(gen_elapsed_ms),
+                            }
+                        }
+                    };
 
-                        records.push(EvalRecord {
-                            style_distance: r.distance,
-                            fk_grade: read.flesch_kincaid_grade,
-                            questions_per_1k: punct.questions_per_1k,
-                            exclamations_per_1k: punct.exclamations_per_1k,
-                            canon_leakage_score: canon_leakage,
-                        });
-                    } else if !ctx.format.is_json() {
-                        eprintln!(
-                            "    [{}/{}] FAILED | ETA {:.0}m",
-                            completed_gens, total_gens, remaining / 60.0,
-                        );
-                    }
+                    all_gen_records.push(record.clone());
+                    gen_records.push(record);
                 }
             }
 
-            if records.is_empty() {
-                if !ctx.format.is_json() {
-                    eprintln!("no successful generations");
-                }
-                continue;
-            }
-
-            // Compute summary stats
-            let n = records.len() as f64;
-            let mut distances: Vec<f64> = records.iter().map(|r| r.style_distance).collect();
-            distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-            let median = if distances.len() % 2 == 0 {
-                let mid = distances.len() / 2;
-                (distances[mid - 1] + distances[mid]) / 2.0
-            } else {
-                distances[distances.len() / 2]
-            };
-
-            let result = AblationResult {
-                training_format: ablation_cfg.name.to_string(),
-                inference_mode: inf_mode.name.to_string(),
-                mean_style_distance: records.iter().map(|r| r.style_distance).sum::<f64>() / n,
-                median_style_distance: median,
-                mean_fk_grade: records.iter().map(|r| r.fk_grade).sum::<f64>() / n,
-                mean_questions_per_1k: records.iter().map(|r| r.questions_per_1k).sum::<f64>() / n,
-                mean_exclamations_per_1k: records
-                    .iter()
-                    .map(|r| r.exclamations_per_1k)
-                    .sum::<f64>()
-                    / n,
-                mean_canon_leakage: records.iter().map(|r| r.canon_leakage_score).sum::<f64>() / n,
-                generations: records.len(),
-                final_loss: *final_loss,
-            };
+            // Compute per-combo stats with bucket breakdowns
+            let combo_result = compute_combo_result(
+                ablation_cfg.name, inf_mode.name, *final_loss, &gen_records,
+            );
 
             if !ctx.format.is_json() {
+                let o = &combo_result.overall;
                 println!(
-                    "dist={:.3} leak={:.3} ({} gens)",
-                    result.mean_style_distance, result.mean_canon_leakage, result.generations
+                    "  {} + {} → dist={:.3} leak={:.3} ({}/{} ok)",
+                    ablation_cfg.name, inf_mode.name,
+                    o.mean_style_distance, o.mean_canon_leakage,
+                    combo_result.succeeded, combo_result.total,
                 );
             }
 
-            all_results.push(result);
+            all_results.push(combo_result);
         }
     }
 
-    // Find best combination (lowest style distance with low leakage)
-    let best = all_results
-        .iter()
-        .min_by(|a, b| {
-            // Primary: style distance. Secondary: canon leakage.
-            let score_a = a.mean_style_distance + a.mean_canon_leakage * 0.5;
-            let score_b = b.mean_style_distance + b.mean_canon_leakage * 0.5;
-            score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|r| format!("{} + {}", r.training_format, r.inference_mode))
-        .unwrap_or_else(|| "none".to_string());
+    // ── Write per-generation records ──────────────────────────────────────
+    let gen_path = output_dir.join("per_generation.jsonl");
+    let mut gen_out = String::new();
+    for rec in &all_gen_records {
+        if let Ok(line) = serde_json::to_string(rec) {
+            gen_out.push_str(&line);
+            gen_out.push('\n');
+        }
+    }
+    std::fs::write(&gen_path, &gen_out)?;
 
-    let best_dist = all_results
-        .iter()
-        .map(|r| r.mean_style_distance)
-        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or(0.0);
+    // ── Hard-gate winner selection ────────────────────────────────────────
+    let winner = select_winner(&all_results);
 
     let summary = AblationSummary {
         configs_tested: ABLATION_CONFIGS.len(),
         inference_modes: INFERENCE_MODES.len(),
         total_combinations: all_results.len(),
-        best_combination: best.clone(),
-        best_style_distance: best_dist,
+        winner,
         results: all_results,
     };
 
-    // Write results
     let summary_path = output_dir.join("ablation_summary.json");
     let summary_json = serde_json::to_string_pretty(&summary)
         .map_err(|e| AppError::Transient(format!("JSON serialization: {e}")))?;
     std::fs::write(&summary_path, &summary_json)?;
-
-    // Write comparison table as CSV
-    let csv_path = output_dir.join("ablation_comparison.csv");
-    write_comparison_csv(&csv_path, &summary.results)?;
 
     if !ctx.format.is_json() {
         use owo_colors::OwoColorize;
         println!();
         println!("{} Ablation complete", "+".green());
         println!();
-        println!("  {} combinations tested", summary.total_combinations);
-        println!(
-            "  best: {} (dist={:.3})",
-            summary.best_combination.bold(),
-            summary.best_style_distance
-        );
-        println!();
-        println!("  Comparison table:");
-        println!();
-        print_comparison_table(&summary.results);
+        println!("  winner: {}", summary.winner.combination.bold());
+        println!("  gate: {}", summary.winner.gate_passed);
+        for reason in &summary.winner.reasoning {
+            println!("    - {reason}");
+        }
         println!();
         println!("  results: {}", output_dir.display().to_string().dimmed());
+        println!("  per-gen: {}", gen_path.display().to_string().dimmed());
     } else {
         crate::output::print_success_or(ctx, &summary, |_| {});
     }
@@ -523,20 +552,16 @@ struct PromptSuite {
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[allow(dead_code)]
 struct PromptEntry {
     text: String,
     #[serde(default)]
     category: String,
 }
 
-#[derive(Debug)]
-struct EvalRecord {
-    style_distance: f64,
-    fk_grade: f64,
-    questions_per_1k: f64,
-    exclamations_per_1k: f64,
-    canon_leakage_score: f64,
+/// Leakage result with matched terms for diagnostics
+struct LeakageResult {
+    score: f64,
+    leaked_terms: Vec<String>,
 }
 
 fn load_canon_lexicon(profile_dir: &Path) -> Vec<String> {
@@ -552,15 +577,15 @@ fn load_canon_lexicon(profile_dir: &Path) -> Vec<String> {
         .collect()
 }
 
-fn compute_canon_leakage(output: &str, prompt: &str, lexicon: &[String]) -> f64 {
+fn compute_canon_leakage(output: &str, prompt: &str, lexicon: &[String]) -> LeakageResult {
     if lexicon.is_empty() {
-        return 0.0;
+        return LeakageResult { score: 0.0, leaked_terms: Vec::new() };
     }
 
     let output_lower = output.to_lowercase();
     let prompt_lower = prompt.to_lowercase();
 
-    let mut leaked = 0;
+    let mut leaked_terms = Vec::new();
     let mut checkable = 0;
 
     for term in lexicon {
@@ -568,16 +593,38 @@ fn compute_canon_leakage(output: &str, prompt: &str, lexicon: &[String]) -> f64 
             continue;
         }
         checkable += 1;
-        if output_lower.contains(term.as_str()) {
-            leaked += 1;
+        // Token-boundary matching: check that the term appears as a whole word/phrase
+        // rather than as a substring of a longer word
+        if contains_whole(term, &output_lower) {
+            leaked_terms.push(term.clone());
         }
     }
 
-    if checkable == 0 {
-        return 0.0;
-    }
+    let score = if checkable == 0 {
+        0.0
+    } else {
+        leaked_terms.len() as f64 / checkable as f64
+    };
 
-    leaked as f64 / checkable as f64
+    LeakageResult { score, leaked_terms }
+}
+
+/// Check if `needle` appears in `haystack` at a word boundary.
+/// Prevents "art" matching inside "article" etc.
+fn contains_whole(needle: &str, haystack: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let nlen = needle_bytes.len();
+
+    for (start, _) in haystack.match_indices(needle) {
+        let end = start + nlen;
+        let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        let after_ok = end >= bytes.len() || !bytes[end].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
 }
 
 /// Write a machine-readable progress file that can be tailed/polled externally.
@@ -613,68 +660,210 @@ fn read_adapter_loss(adapter_dir: &Path) -> Option<f32> {
     json.get("final_loss")?.as_f64().map(|f| f as f32)
 }
 
-fn write_comparison_csv(path: &Path, results: &[AblationResult]) -> Result<(), AppError> {
-    let mut out = String::new();
-    out.push_str("training_format,inference_mode,mean_dist,median_dist,fk_grade,questions_1k,exclamations_1k,canon_leakage,final_loss,generations\n");
-
-    for r in results {
-        out.push_str(&format!(
-            "{},{},{:.4},{:.4},{:.1},{:.1},{:.1},{:.4},{:.4},{}\n",
-            r.training_format,
-            r.inference_mode,
-            r.mean_style_distance,
-            r.median_style_distance,
-            r.mean_fk_grade,
-            r.mean_questions_per_1k,
-            r.mean_exclamations_per_1k,
-            r.mean_canon_leakage,
-            r.final_loss,
-            r.generations,
-        ));
+/// Normalize prompt category to standard buckets.
+/// Anything not canon-adjacent/longform/shortform → off-domain.
+fn normalize_bucket(category: &str) -> String {
+    match category {
+        "canon-adjacent" => "canon-adjacent".to_string(),
+        "longform" => "longform".to_string(),
+        "shortform" => "shortform".to_string(),
+        _ => "off-domain".to_string(),
     }
-
-    std::fs::write(path, out).map_err(AppError::Io)
 }
 
-fn print_comparison_table(results: &[AblationResult]) {
-    use owo_colors::OwoColorize;
+/// Compute per-combination stats with bucket breakdowns.
+fn compute_combo_result(
+    format_name: &str,
+    mode_name: &str,
+    final_loss: f32,
+    records: &[GenerationRecord],
+) -> ComboResult {
+    let succeeded = records.iter().filter(|r| r.status == "ok").count();
+    let failed = records.iter().filter(|r| r.status == "failed").count();
 
-    println!(
-        "  {:20} {:10} {:>8} {:>8} {:>8}",
-        "format".bold(),
-        "mode".bold(),
-        "dist".bold(),
-        "leak".bold(),
-        "loss".bold()
-    );
-    println!("  {}", "-".repeat(58));
+    // Overall stats from successful records
+    let ok_records: Vec<&GenerationRecord> = records.iter().filter(|r| r.status == "ok").collect();
+    let overall = compute_bucket_stats("overall", &ok_records, failed);
 
-    for r in results {
-        let dist_color = if r.mean_style_distance < 0.25 {
-            "\x1b[32m" // green
-        } else if r.mean_style_distance < 0.30 {
-            "\x1b[33m" // yellow
-        } else {
-            "\x1b[31m" // red
+    // Per-bucket stats
+    let mut buckets = std::collections::BTreeMap::new();
+    let bucket_names: std::collections::BTreeSet<String> = records.iter().map(|r| r.category.clone()).collect();
+
+    for bucket_name in &bucket_names {
+        let bucket_ok: Vec<&GenerationRecord> = ok_records.iter()
+            .filter(|r| r.category == *bucket_name)
+            .copied()
+            .collect();
+        let bucket_failed = records.iter()
+            .filter(|r| r.category == *bucket_name && r.status == "failed")
+            .count();
+        buckets.insert(bucket_name.clone(), compute_bucket_stats(bucket_name, &bucket_ok, bucket_failed));
+    }
+
+    ComboResult {
+        training_format: format_name.to_string(),
+        inference_mode: mode_name.to_string(),
+        final_loss,
+        total: records.len(),
+        succeeded,
+        failed,
+        overall,
+        buckets,
+    }
+}
+
+fn compute_bucket_stats(name: &str, records: &[&GenerationRecord], failed: usize) -> BucketStats {
+    let n = records.len() as f64;
+    if records.is_empty() {
+        return BucketStats {
+            bucket: name.to_string(),
+            count: 0,
+            failed,
+            mean_style_distance: 0.0,
+            median_style_distance: 0.0,
+            variance_style_distance: 0.0,
+            mean_canon_leakage: 0.0,
+            worst_canon_leakage: 0.0,
+            mean_questions_per_1k: 0.0,
+            mean_exclamations_per_1k: 0.0,
+            mean_fk_grade: 0.0,
         };
+    }
 
-        let leak_color = if r.mean_canon_leakage < 0.05 {
-            "\x1b[32m"
-        } else if r.mean_canon_leakage < 0.10 {
-            "\x1b[33m"
-        } else {
-            "\x1b[31m"
+    let dists: Vec<f64> = records.iter().filter_map(|r| r.style_distance).collect();
+    let mean_dist = dists.iter().sum::<f64>() / n;
+
+    let mut sorted_dists = dists.clone();
+    sorted_dists.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_dist = if sorted_dists.len() % 2 == 0 {
+        let m = sorted_dists.len() / 2;
+        (sorted_dists[m - 1] + sorted_dists[m]) / 2.0
+    } else {
+        sorted_dists[sorted_dists.len() / 2]
+    };
+
+    let variance_dist = dists.iter().map(|d| (d - mean_dist).powi(2)).sum::<f64>() / n;
+
+    let leakages: Vec<f64> = records.iter().filter_map(|r| r.canon_leakage_score).collect();
+    let mean_leak = leakages.iter().sum::<f64>() / n.max(1.0);
+    let worst_leak = leakages.iter().copied().fold(0.0f64, f64::max);
+
+    BucketStats {
+        bucket: name.to_string(),
+        count: records.len(),
+        failed,
+        mean_style_distance: mean_dist,
+        median_style_distance: median_dist,
+        variance_style_distance: variance_dist,
+        mean_canon_leakage: mean_leak,
+        worst_canon_leakage: worst_leak,
+        mean_questions_per_1k: records.iter().filter_map(|r| r.questions_per_1k).sum::<f64>() / n,
+        mean_exclamations_per_1k: records.iter().filter_map(|r| r.exclamations_per_1k).sum::<f64>() / n,
+        mean_fk_grade: records.iter().filter_map(|r| r.fk_grade).sum::<f64>() / n,
+    }
+}
+
+/// Hard-gate winner selection per the decision protocol:
+/// Gate 1: lowest off-domain canon leakage
+/// Gate 2: acceptable structural voice metrics (questions, exclamations)
+/// Gate 3: lowest overall style distance as tiebreaker
+fn select_winner(results: &[ComboResult]) -> WinnerReport {
+    if results.is_empty() {
+        return WinnerReport {
+            combination: "none".to_string(),
+            gate_passed: "none".to_string(),
+            off_domain_leakage: 0.0,
+            overall_style_distance: 0.0,
+            reasoning: vec!["No results to evaluate".to_string()],
         };
+    }
 
-        println!(
-            "  {:20} {:10} {}{:>8.3}\x1b[0m {}{:>8.3}\x1b[0m {:>8.3}",
-            r.training_format,
-            r.inference_mode,
-            dist_color,
-            r.mean_style_distance,
-            leak_color,
-            r.mean_canon_leakage,
-            r.final_loss,
-        );
+    let mut reasoning = Vec::new();
+
+    // Gate 1: Filter by off-domain canon leakage
+    let off_domain_leakages: Vec<(usize, f64)> = results.iter().enumerate()
+        .map(|(i, r)| {
+            let leak = r.buckets.get("off-domain")
+                .map(|b| b.mean_canon_leakage)
+                .unwrap_or(r.overall.mean_canon_leakage);
+            (i, leak)
+        })
+        .collect();
+
+    let min_leak = off_domain_leakages.iter().map(|(_, l)| *l).fold(f64::MAX, f64::min);
+    // Allow within 50% of best leakage (or absolute threshold 0.05)
+    let leak_threshold = (min_leak * 1.5).max(0.05);
+    let gate1_survivors: Vec<usize> = off_domain_leakages.iter()
+        .filter(|(_, l)| *l <= leak_threshold)
+        .map(|(i, _)| *i)
+        .collect();
+
+    reasoning.push(format!(
+        "Gate 1 (leakage ≤ {:.3}): {} of {} survive",
+        leak_threshold, gate1_survivors.len(), results.len()
+    ));
+
+    if gate1_survivors.is_empty() {
+        // All fail — pick lowest leakage anyway
+        let best_idx = off_domain_leakages.iter()
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| *i)
+            .unwrap_or(0);
+        let r = &results[best_idx];
+        return WinnerReport {
+            combination: format!("{} + {}", r.training_format, r.inference_mode),
+            gate_passed: "gate1-all-failed".to_string(),
+            off_domain_leakage: off_domain_leakages[best_idx].1,
+            overall_style_distance: r.overall.mean_style_distance,
+            reasoning,
+        };
+    }
+
+    // Gate 2: Best structural voice metrics (questions + exclamations)
+    let mut gate2_scored: Vec<(usize, f64)> = gate1_survivors.iter()
+        .map(|&i| {
+            let r = &results[i];
+            let q = r.overall.mean_questions_per_1k;
+            let e = r.overall.mean_exclamations_per_1k;
+            // Higher is better for structural voice
+            (i, q + e)
+        })
+        .collect();
+    gate2_scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let best_voice = gate2_scored[0].1;
+    // Keep those within 80% of best voice score
+    let voice_threshold = best_voice * 0.8;
+    let gate2_survivors: Vec<usize> = gate2_scored.iter()
+        .filter(|(_, s)| *s >= voice_threshold)
+        .map(|(i, _)| *i)
+        .collect();
+
+    reasoning.push(format!(
+        "Gate 2 (voice ≥ {:.1}): {} survive",
+        voice_threshold, gate2_survivors.len()
+    ));
+
+    // Gate 3: Lowest style distance as tiebreaker
+    let mut gate3_scored: Vec<(usize, f64)> = gate2_survivors.iter()
+        .map(|&i| (i, results[i].overall.mean_style_distance))
+        .collect();
+    gate3_scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let winner_idx = gate3_scored[0].0;
+    let r = &results[winner_idx];
+    let winner_leak = off_domain_leakages[winner_idx].1;
+
+    reasoning.push(format!(
+        "Gate 3 (tiebreak): {} + {} wins with dist={:.3}",
+        r.training_format, r.inference_mode, r.overall.mean_style_distance
+    ));
+
+    WinnerReport {
+        combination: format!("{} + {}", r.training_format, r.inference_mode),
+        gate_passed: "gate3-tiebreak".to_string(),
+        off_domain_leakage: winner_leak,
+        overall_style_distance: r.overall.mean_style_distance,
+        reasoning,
     }
 }

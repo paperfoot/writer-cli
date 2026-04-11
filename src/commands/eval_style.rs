@@ -372,8 +372,9 @@ fn load_canon_lexicon(profile_dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Score canon leakage: fraction of canon terms that appear in the output
-/// but are not present in the prompt.
+/// Score canon leakage with token-boundary matching.
+/// Returns fraction of checkable canon terms that leaked into the output
+/// without being present in the prompt.
 fn compute_canon_leakage(output: &str, prompt: &str, lexicon: &[String]) -> f64 {
     if lexicon.is_empty() {
         return 0.0;
@@ -386,12 +387,11 @@ fn compute_canon_leakage(output: &str, prompt: &str, lexicon: &[String]) -> f64 
     let mut checkable = 0;
 
     for term in lexicon {
-        // Skip terms present in the prompt (they're expected)
         if prompt_lower.contains(term.as_str()) {
             continue;
         }
         checkable += 1;
-        if output_lower.contains(term.as_str()) {
+        if contains_whole_word(term, &output_lower) {
             leaked += 1;
         }
     }
@@ -401,6 +401,22 @@ fn compute_canon_leakage(output: &str, prompt: &str, lexicon: &[String]) -> f64 
     }
 
     leaked as f64 / checkable as f64
+}
+
+/// Check if `needle` appears in `haystack` at word boundaries.
+fn contains_whole_word(needle: &str, haystack: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let nlen = needle.len();
+
+    for (start, _) in haystack.match_indices(needle) {
+        let end = start + nlen;
+        let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        let after_ok = end >= bytes.len() || !bytes[end].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
 }
 
 // ── CSV writer ────────────────────────────────────────────────────────────
