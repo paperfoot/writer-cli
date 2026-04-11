@@ -149,6 +149,7 @@ pub async fn run(
         system.as_deref(),
         adapter.as_ref(),
         prompt_mode.as_deref(),
+        None, // seed: non-deterministic for interactive use
     )
     .await
     .map_err(|e| AppError::Transient(e.to_string()))?;

@@ -210,6 +210,9 @@ pub async fn run(
 
             let prompt_mode = if raw { Some("raw") } else { None };
 
+            // Deterministic seed: combine prompt index and seed index
+            let rng_seed = (pi as u64) * 1000 + seed as u64 + 42;
+
             let result = decoding::run(
                 backend_box.as_ref(),
                 &handle,
@@ -220,6 +223,7 @@ pub async fn run(
                 system.as_deref(),
                 adapter.as_ref(),
                 prompt_mode,
+                Some(rng_seed),
             )
             .await;
 

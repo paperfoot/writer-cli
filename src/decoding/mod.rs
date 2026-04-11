@@ -60,8 +60,9 @@ pub async fn run(
     system_prompt: Option<&str>,
     adapter: Option<&AdapterRef>,
     prompt_mode: Option<&str>,
+    seed: Option<u64>,
 ) -> Result<GenerationResult, DecodingError> {
-    let max_attempts = 3;
+    let max_attempts = config.max_attempts.unwrap_or(3) as usize;
 
     for attempt in 0..max_attempts {
         // Build request with logit bias from fingerprint
@@ -83,6 +84,8 @@ pub async fn run(
         if let Some(mode) = prompt_mode {
             req.prompt_mode = Some(mode.to_string());
         }
+
+        req.seed = seed;
 
         // Generate candidates
         let mut stream = backend

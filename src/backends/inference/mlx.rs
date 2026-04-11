@@ -36,6 +36,8 @@ struct MlxRequest {
     repetition_penalty: f32,
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
     logit_bias: std::collections::HashMap<String, f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,6 +138,7 @@ impl MlxBackend {
             top_p: request.params.top_p,
             repetition_penalty: request.params.repetition_penalty,
             logit_bias: request.logit_bias.clone(),
+            seed: request.seed,
         };
 
         let input_json =

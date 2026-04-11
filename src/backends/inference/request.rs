@@ -25,6 +25,8 @@ pub struct GenerationRequest {
     /// "chat" (default) or "raw". In raw mode the MLX bridge skips
     /// chat template formatting and sends the prompt verbatim.
     pub prompt_mode: Option<String>,
+    /// RNG seed for reproducible generation. None = non-deterministic.
+    pub seed: Option<u64>,
     pub draft_model: Option<ModelId>,
     pub contrastive_base: Option<ModelId>,
 }
@@ -40,6 +42,7 @@ impl GenerationRequest {
             stop_sequences: Vec::new(),
             system_prompt: None,
             prompt_mode: None,
+            seed: None,
             draft_model: None,
             contrastive_base: None,
         }

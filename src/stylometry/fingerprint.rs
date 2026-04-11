@@ -58,7 +58,8 @@ impl StylometricFingerprint {
         let char_count = samples.iter().map(|s| s.char_count() as u64).sum();
 
         let word_length = lengths::word_lengths(&full_text);
-        let sentence_length = lengths::sentence_lengths(&full_text);
+        let mut sentence_length = lengths::sentence_lengths(&full_text);
+        sentence_length.histogram = lengths::sentence_length_histogram(&full_text);
         let paragraph_length = lengths::paragraph_lengths(&full_text);
         let function_words_freq = function_words::compute(&full_text);
         let trigram_profile = ngrams::trigrams(&full_text);

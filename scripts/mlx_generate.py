@@ -85,9 +85,15 @@ def main():
     top_p = req.get("top_p", 0.92)
     repetition_penalty = req.get("repetition_penalty", 1.05)
     logit_bias = req.get("logit_bias")
+    seed = req.get("seed")
 
+    import mlx.core as mx
     from mlx_lm import load, stream_generate
     from mlx_lm.sample_utils import make_sampler
+
+    # Set seed for reproducibility if provided
+    if seed is not None:
+        mx.random.seed(seed)
 
     model, tokenizer = load(model_path, adapter_path=adapter_path)
 

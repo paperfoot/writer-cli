@@ -256,6 +256,18 @@ pub async fn run(
         println!("{} Running evaluations...", ">".blue());
     }
 
+    // Ablation-specific decoding: n_candidates=1, max_attempts=1, fixed params
+    // We're comparing formats, not ranking candidates.
+    let ablation_decoding = writer_cli::config::DecodingConfig {
+        n_candidates: 1,
+        max_tokens: cfg.decoding.max_tokens,
+        max_attempts: Some(1),
+        contrastive_alpha: 0.0,
+        banned_word_bias: cfg.decoding.banned_word_bias,
+        preferred_word_bias: cfg.decoding.preferred_word_bias,
+        kv_quant: cfg.decoding.kv_quant.clone(),
+    };
+
     // Load prompt suite
     let suite_content = std::fs::read_to_string(&suite_path)?;
     let suite: PromptSuite = serde_yaml::from_str(&suite_content)
@@ -312,6 +324,9 @@ pub async fn run(
 
                     let prompt_mode = if inf_mode.raw { Some("raw") } else { None };
 
+                    // Deterministic seed: same prompt+seed pair across all combos
+                    let rng_seed = (pi as u64) * 1000 + seed as u64 + 42;
+
                     let gen_start = std::time::Instant::now();
 
                     let result = decoding::run(
@@ -319,11 +334,12 @@ pub async fn run(
                         &handle,
                         &model_id,
                         &fingerprint,
-                        &cfg.decoding,
+                        &ablation_decoding,
                         &write_prompt,
                         system.as_deref(),
                         Some(&adapter),
                         prompt_mode,
+                        Some(rng_seed),
                     )
                     .await;
 

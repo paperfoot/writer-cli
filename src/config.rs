@@ -41,6 +41,10 @@ pub struct InferenceConfig {
 pub struct DecodingConfig {
     pub n_candidates: u16,
     pub max_tokens: u32,
+    /// Maximum generation attempts before returning best candidate.
+    /// None = default (3). Set to 1 for ablation runs.
+    #[serde(default)]
+    pub max_attempts: Option<u16>,
     /// Contrastive alpha for CoPe-style decoding. Set to 0.0 to disable.
     /// Requires a contrastive_base model to be specified in generation request.
     /// Currently only supported by Ollama backend.
@@ -126,6 +130,7 @@ impl Default for DecodingConfig {
         Self {
             n_candidates: 8,
             max_tokens: 4096,
+            max_attempts: None,
             contrastive_alpha: 0.0, // disabled until contrastive_base model is wired
             banned_word_bias: -4.0,
             preferred_word_bias: 1.5,

@@ -114,9 +114,23 @@ fn scoring_ai_text_has_higher_slop_penalty() {
     let ai_report = scoring::distance(AI_TEXT, &fp);
 
     assert!(
-        ai_report.ai_slop_penalty > human_report.ai_slop_penalty,
+        ai_report.slop_score > human_report.slop_score,
         "AI text slop ({:.3}) should be higher than human ({:.3})",
-        ai_report.ai_slop_penalty,
-        human_report.ai_slop_penalty
+        ai_report.slop_score,
+        human_report.slop_score
     );
+}
+
+#[test]
+fn sentence_segmentation_audit() {
+    use writer_cli::stylometry::features::lengths;
+    // Test with abbreviations that should NOT split
+    let text_with_abbrevs = "Mr. Ford Prefect arrived at 3 p.m. on Tuesday. He was quite annoyed.";
+    let stats = lengths::sentence_lengths(text_with_abbrevs);
+    println!("Abbrev text: mean={:.1} sd={:.1} sentences detected", stats.mean, stats.sd);
+
+    // Test with Adams-like short fragments
+    let adams_like = "Don't panic. Mostly harmless. So long, and thanks for all the fish! The ships hung in the sky in much the same way that bricks don't.";
+    let stats2 = lengths::sentence_lengths(adams_like);
+    println!("Adams-like: mean={:.1} sd={:.1}", stats2.mean, stats2.sd);
 }

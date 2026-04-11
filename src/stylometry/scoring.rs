@@ -17,54 +17,77 @@ use crate::stylometry::fingerprint::StylometricFingerprint;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistanceReport {
     pub overall: f64,
-    pub sentence_length_kl: f64,
+    /// Voice distance before slop penalty
+    pub base_voice_distance: f64,
+    pub sentence_length_dist: f64,
     pub function_word_cos: f64,
-    pub punctuation_l1: f64,
+    /// Terminal punctuation: questions + exclamations
+    pub terminal_punct_dist: f64,
+    /// Structural punctuation: em-dashes, semicolons, colons, parens
+    pub structural_punct_dist: f64,
     pub ngram_cos: f64,
     pub readability_diff: f64,
     pub richness_diff: f64,
-    pub ai_slop_penalty: f64,
+    /// Raw slop score (0.0 = clean, higher = more slop)
+    pub slop_score: f64,
+    /// Multiplier applied to base distance (1.0 = no penalty)
+    pub slop_multiplier: f64,
 }
 
 /// Compute stylometric distance between text and a fingerprint.
 /// Returns 0.0 (identical style) to 1.0 (maximally different).
 ///
 /// Weight rationale (grounded in PAN shared task findings + Writeprints):
-/// - Function words (0.20): Top discriminator in PAN 2011-2025 shared tasks
+/// - Function words (0.25): Top discriminator in PAN 2011-2025 shared tasks
 /// - Char n-grams (0.20): Second-strongest signal per PAN evaluations
 /// - Sentence length (0.15): Classic Writeprints feature (Abbasi & Chen 2008)
-/// - Punctuation (0.10): Strong AI-tell signal (em-dashes, semicolons)
+/// - Terminal punctuation (0.10): Questions + exclamations — biggest gap for Adams
+/// - Structural punctuation (0.10): Em-dashes, semicolons, colons, parentheses
 /// - Readability (0.10): Captures complexity patterns (Flesch 1948, Coleman-Liau 1975)
 /// - Vocabulary richness (0.10): Yule's K + hapax ratio (Yule 1944, Writeprints)
-/// - AI-slop penalty (0.15): Catches LLM-specific word/phrase patterns
+///
+/// AI-slop is a post-score penalty multiplier, not a weighted component.
+/// It uses a dead-zone + quadratic ramp so small amounts of slop are tolerated
+/// but heavy slop aggressively penalizes the score. (GPT Pro round 3 recommendation)
 pub fn distance(text: &str, fingerprint: &StylometricFingerprint) -> DistanceReport {
-    let sentence_length_kl = sentence_length_divergence(text, fingerprint);
+    let sentence_length_dist = sentence_length_divergence(text, fingerprint);
     let function_word_cos = function_word_distance(text, fingerprint);
-    let punctuation_l1 = punctuation_distance(text, fingerprint);
+    let (terminal_punct_dist, structural_punct_dist) = punctuation_distance_split(text, fingerprint);
     let ngram_cos = ngram_distance(text, fingerprint);
     let readability_diff = readability_distance(text, fingerprint);
     let richness_diff = richness_distance(text, fingerprint);
-    let ai_slop_penalty = slop_penalty(text);
+    let slop_score = compute_slop_score(text);
 
-    // Weighted combination — weights validated against PAN shared task findings
-    let overall = (function_word_cos * 0.20
+    // Weighted voice distance (without slop)
+    let base_voice_distance = (function_word_cos * 0.25
         + ngram_cos * 0.20
-        + sentence_length_kl * 0.15
-        + punctuation_l1 * 0.10
+        + sentence_length_dist * 0.15
+        + terminal_punct_dist * 0.10
+        + structural_punct_dist * 0.10
         + readability_diff * 0.10
-        + richness_diff * 0.10
-        + ai_slop_penalty * 0.15)
+        + richness_diff * 0.10)
         .clamp(0.0, 1.0);
+
+    // AI-slop: dead-zone + quadratic penalty multiplier
+    // Dead zone: slop < 0.02 → no penalty (tolerates detector noise)
+    // Ramp: quadratic from 0.02 to 0.10, then saturates
+    let x = ((slop_score - 0.02).max(0.0) / 0.08).min(1.0);
+    let slop_multiplier = 1.0 + 0.4 * x * x;
+
+    let overall = (base_voice_distance * slop_multiplier).clamp(0.0, 1.0);
 
     DistanceReport {
         overall,
-        sentence_length_kl,
+        base_voice_distance,
+        sentence_length_dist,
         function_word_cos,
-        punctuation_l1,
+        terminal_punct_dist,
+        structural_punct_dist,
         ngram_cos,
         readability_diff,
         richness_diff,
-        ai_slop_penalty,
+        slop_score,
+        slop_multiplier,
     }
 }
 
@@ -74,7 +97,13 @@ fn sentence_length_divergence(text: &str, fp: &StylometricFingerprint) -> f64 {
         return 0.5;
     }
 
-    // Simplified KL-like divergence using mean and SD
+    // Use EMD when fingerprint has histogram (new fingerprints), fall back to mean/SD
+    if !fp.sentence_length.histogram.is_empty() {
+        let text_hist = lengths::sentence_length_histogram(text);
+        return lengths::histogram_emd(&text_hist, &fp.sentence_length.histogram);
+    }
+
+    // Legacy fallback: simplified divergence using mean and SD
     let mean_diff = ((text_stats.mean - fp.sentence_length.mean) / fp.sentence_length.mean.max(1.0)).abs();
     let sd_diff = if fp.sentence_length.sd > 0.0 {
         ((text_stats.sd - fp.sentence_length.sd) / fp.sentence_length.sd).abs()
@@ -122,23 +151,31 @@ fn function_word_distance(text: &str, fp: &StylometricFingerprint) -> f64 {
     (1.0 - cosine_sim).clamp(0.0, 1.0)
 }
 
-fn punctuation_distance(text: &str, fp: &StylometricFingerprint) -> f64 {
+/// Split punctuation into terminal (questions, exclamations) and structural
+/// (em-dashes, semicolons, colons, parentheses). en_dashes excluded as noise-prone.
+///
+/// Returns (terminal_distance, structural_distance), each in [0.0, 1.0].
+fn punctuation_distance_split(text: &str, fp: &StylometricFingerprint) -> (f64, f64) {
     let text_punct = PunctuationStats::compute(text);
     let fp_p = &fp.punctuation;
 
-    // L1 distance normalized by typical ranges
-    let diffs = [
+    // Terminal: questions + exclamations — the biggest Adams gap
+    let terminal_diffs = [
+        (text_punct.questions_per_1k - fp_p.questions_per_1k).abs() / 10.0,
+        (text_punct.exclamations_per_1k - fp_p.exclamations_per_1k).abs() / 10.0,
+    ];
+    let terminal = (terminal_diffs.iter().sum::<f64>() / terminal_diffs.len() as f64).clamp(0.0, 1.0);
+
+    // Structural: em-dashes, semicolons, colons, parens (en_dashes excluded)
+    let structural_diffs = [
         (text_punct.em_dashes_per_1k - fp_p.em_dashes_per_1k).abs() / 20.0,
-        (text_punct.en_dashes_per_1k - fp_p.en_dashes_per_1k).abs() / 20.0,
         (text_punct.semicolons_per_1k - fp_p.semicolons_per_1k).abs() / 10.0,
         (text_punct.colons_per_1k - fp_p.colons_per_1k).abs() / 10.0,
-        (text_punct.exclamations_per_1k - fp_p.exclamations_per_1k).abs() / 10.0,
-        (text_punct.questions_per_1k - fp_p.questions_per_1k).abs() / 10.0,
         (text_punct.parentheses_per_1k - fp_p.parentheses_per_1k).abs() / 20.0,
     ];
+    let structural = (structural_diffs.iter().sum::<f64>() / structural_diffs.len() as f64).clamp(0.0, 1.0);
 
-    let avg: f64 = diffs.iter().sum::<f64>() / diffs.len() as f64;
-    avg.clamp(0.0, 1.0)
+    (terminal, structural)
 }
 
 fn ngram_distance(text: &str, fp: &StylometricFingerprint) -> f64 {
@@ -239,16 +276,27 @@ fn richness_distance(text: &str, fp: &StylometricFingerprint) -> f64 {
     ((yules_diff + hapax_diff + simpsons_diff) / 3.0).clamp(0.0, 1.0)
 }
 
-fn slop_penalty(text: &str) -> f64 {
+/// Canonical slop scorer — single implementation used by scoring, filter, eval.
+///
+/// Returns a normalized 0.0-1.0 score based on density of AI-tell words/phrases.
+/// Author-valid discourse markers (furthermore, moreover, nevertheless) are
+/// excluded because they appear in the Adams fingerprint.
+pub fn compute_slop_score(text: &str) -> f64 {
     let text_lower = text.to_lowercase();
     let word_count = text.unicode_words().count() as f64;
     if word_count == 0.0 {
         return 0.0;
     }
 
-    // Count actual occurrences, not just presence (Codex review fix)
+    // Words that are banned as AI slop BUT present in the author corpus.
+    // These must not be penalized. GPT Pro round 3 flagged this conflict.
+    const AUTHOR_VALID: &[&str] = &["furthermore", "moreover", "nevertheless"];
+
     let mut word_occurrences: usize = 0;
     for word in ai_slop::BANNED_WORDS {
+        if AUTHOR_VALID.contains(word) {
+            continue;
+        }
         word_occurrences += text_lower.matches(word).count();
     }
 
