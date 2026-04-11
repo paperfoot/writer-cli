@@ -5,15 +5,18 @@
 use crate::stylometry::fingerprint::StylometricFingerprint;
 
 /// Build a system prompt that primes the model with the user's stylometric profile.
+///
+/// The prompt encodes measurable voice features from the fingerprint so the model
+/// has a concrete target for rhythm, punctuation, and vocabulary.
 pub fn system_prompt(fingerprint: &StylometricFingerprint) -> String {
-    let _avg_sentence_len = fingerprint.sentence_length.mean;
     let avg_word_len = fingerprint.word_length.mean;
+    let avg_sent_len = fingerprint.sentence_length.mean;
+    let sent_sd = fingerprint.sentence_length.sd;
 
-    // Top 5 preferred words (distinctive vocabulary)
     let preferred: Vec<&str> = fingerprint
         .preferred_words
         .iter()
-        .take(5)
+        .take(8)
         .map(|(w, _)| w.as_str())
         .collect();
     let preferred_str = if preferred.is_empty() {
@@ -22,16 +25,44 @@ pub fn system_prompt(fingerprint: &StylometricFingerprint) -> String {
         preferred.join(", ")
     };
 
-    // Punctuation profile summary
-    let _em_dashes = fingerprint.punctuation.em_dashes_per_1k;
-    let _semicolons = fingerprint.punctuation.semicolons_per_1k;
+    // Build punctuation guidance from actual fingerprint rates
+    let mut punct_notes = Vec::new();
+    if fingerprint.punctuation.questions_per_1k > 2.0 {
+        punct_notes.push(format!(
+            "Ask rhetorical questions (~{:.0} per 1000 words)",
+            fingerprint.punctuation.questions_per_1k
+        ));
+    }
+    if fingerprint.punctuation.exclamations_per_1k > 1.0 {
+        punct_notes.push(format!(
+            "Use exclamations for emphasis (~{:.0} per 1000 words)",
+            fingerprint.punctuation.exclamations_per_1k
+        ));
+    }
+    if fingerprint.punctuation.em_dashes_per_1k > 2.0 {
+        punct_notes.push("Use em-dashes for asides and interruptions".to_string());
+    }
+
+    let punct_section = if punct_notes.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n{}",
+            punct_notes
+                .iter()
+                .map(|n| format!("- {n}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
 
     format!(
         "You are a writer with a distinctive voice. Your writing tends to:\n\
-         - Use short, punchy sentences mixed with occasional longer ones\n\
+         - Mix very short sentences ({:.0}-word fragments) with longer flowing ones (SD {:.1})\n\
          - Favor simple, concrete words (average {avg_word_len:.1} chars per word)\n\
-         - Use questions and exclamations freely\n\
-         - Include dry wit and understatement\n\
+         - Average sentence length around {avg_sent_len:.0} words, but vary widely\
+         {punct_section}\n\
+         - Include dry wit, understatement, and comic timing\n\
          - Words you favor: {preferred_str}\n\
          \n\
          Avoid these AI-sounding words and phrases: delve, tapestry, landscape, \
@@ -39,6 +70,8 @@ pub fn system_prompt(fingerprint: &StylometricFingerprint) -> String {
          it's worth noting, in today's world, the intersection of.\n\
          \n\
          Write naturally. Output only the requested text.",
+        (avg_sent_len - sent_sd).max(1.0),
+        sent_sd,
     )
 }
 

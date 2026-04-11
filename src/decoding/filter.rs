@@ -11,6 +11,35 @@ pub struct FilterResult {
     pub reasons: Vec<String>,
 }
 
+/// Detect repetition collapse by checking for repeated n-grams.
+/// Returns 0.0 (no repetition) to 1.0 (fully repeated).
+fn detect_repetition(text: &str) -> f64 {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() < 20 {
+        return 0.0;
+    }
+
+    // Check 4-gram repetition rate
+    let mut seen = std::collections::HashMap::new();
+    let mut repeated_positions = 0usize;
+
+    for window in words.windows(4) {
+        let key = window.join(" ");
+        let count = seen.entry(key).or_insert(0usize);
+        *count += 1;
+        if *count > 1 {
+            repeated_positions += 1;
+        }
+    }
+
+    let total_windows = words.len().saturating_sub(3);
+    if total_windows == 0 {
+        return 0.0;
+    }
+
+    repeated_positions as f64 / total_windows as f64
+}
+
 /// Check a generated text against quality criteria.
 pub fn check(
     text: &str,
@@ -43,6 +72,17 @@ pub fn check(
     let word_count = text.split_whitespace().count();
     if word_count < 10 {
         reasons.push("output too short (< 10 words)".to_string());
+    }
+
+    // Check for repetition collapse — catch outputs where the model loops
+    if word_count > 20 {
+        let repetition_ratio = detect_repetition(text);
+        if repetition_ratio > 0.4 {
+            reasons.push(format!(
+                "repetition collapse detected ({:.0}% repeated phrases)",
+                repetition_ratio * 100.0
+            ));
+        }
     }
 
     FilterResult {
