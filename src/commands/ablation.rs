@@ -7,18 +7,18 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use writer_cli::backends::inference::mlx::MlxBackend;
-use writer_cli::backends::inference::InferenceBackend;
+use writer_cli::backends::inference::mlx_worker::{MlxWorker, WorkerRequest};
 use writer_cli::backends::training::config::LoraConfig;
 use writer_cli::backends::training::mlx_tune::{self, MlxTuneBackend};
 use writer_cli::backends::training::TrainingBackend;
 use writer_cli::backends::types::ModelId;
 use writer_cli::config::DatasetFormat;
-use writer_cli::decoding;
+use writer_cli::decoding::logit_bias;
 use writer_cli::decoding::prompts;
 use writer_cli::stylometry::features::punctuation::PunctuationStats;
 use writer_cli::stylometry::features::readability::ReadabilityStats;
 use writer_cli::stylometry::fingerprint::StylometricFingerprint;
+use writer_cli::stylometry::scoring;
 
 use crate::config;
 use crate::error::AppError;
@@ -315,58 +315,40 @@ pub async fn run(
         println!("{} Running evaluations...", ">".blue());
     }
 
-    // Ablation-specific decoding: n_candidates=1, max_attempts=1, fixed params
-    // We're comparing formats, not ranking candidates.
-    let ablation_decoding = writer_cli::config::DecodingConfig {
-        n_candidates: 1,
-        max_tokens: cfg.decoding.max_tokens,
-        max_attempts: Some(1),
-        contrastive_alpha: 0.0,
-        banned_word_bias: cfg.decoding.banned_word_bias,
-        preferred_word_bias: cfg.decoding.preferred_word_bias,
-        kv_quant: cfg.decoding.kv_quant.clone(),
-    };
-
     // Load prompt suite
     let suite_content = std::fs::read_to_string(&suite_path)?;
     let suite: PromptSuite = serde_yaml::from_str(&suite_content)
         .map_err(|e| AppError::InvalidInput(format!("Invalid YAML: {e}")))?;
 
+    // Build logit bias once (same fingerprint for all combos)
+    let bias = logit_bias::from_fingerprint(&fingerprint, &cfg.decoding);
+
     // Progress tracking
-    let total_gens = ABLATION_CONFIGS.len() * INFERENCE_MODES.len() * suite.prompts.len() * seeds as usize;
+    let total_gens = trained_adapters.len() * INFERENCE_MODES.len() * suite.prompts.len() * seeds as usize;
     let progress_path = output_dir.join("progress.log");
     let mut completed_gens: usize = 0;
     let eval_start = std::time::Instant::now();
-
-    // Write initial progress
     write_progress(&progress_path, 0, total_gens, 0.0, "starting evaluation", "")?;
 
-    // Create MLX backend
-    let mlx_backend = MlxBackend::new().map_err(|e| AppError::Transient(e.to_string()))?;
-    let handle = mlx_backend
-        .load_model(&model_id)
-        .await
-        .map_err(|e| AppError::Transient(e.to_string()))?;
-
+    // Evaluate: one persistent worker per adapter (model loaded once per adapter)
     for (ablation_cfg, adapter_path, final_loss) in &trained_adapters {
-        let adapter = writer_cli::backends::types::AdapterRef::new(
-            ablation_cfg.name.to_string(),
-            adapter_path.clone(),
-        );
+        if !ctx.format.is_json() {
+            eprintln!("  spawning worker for {} adapter...", ablation_cfg.name);
+        }
+
+        let mut worker = MlxWorker::spawn(&model_id, Some(adapter_path.as_path()))
+            .await
+            .map_err(|e| AppError::Transient(format!("Worker spawn failed: {e}")))?;
 
         for inf_mode in INFERENCE_MODES {
             let combo_name = format!("{} + {}", ablation_cfg.name, inf_mode.name);
             if !ctx.format.is_json() {
-                eprintln!(
-                    "  evaluating: {}",
-                    combo_name,
-                );
+                eprintln!("  evaluating: {combo_name}");
             }
 
             let mut gen_records: Vec<GenerationRecord> = Vec::new();
 
             for (pi, prompt_entry) in suite.prompts.iter().enumerate() {
-                // Normalize bucket: anything not canon-adjacent/longform/shortform → off-domain
                 let bucket = normalize_bucket(&prompt_entry.category);
 
                 for seed in 0..seeds {
@@ -384,23 +366,23 @@ pub async fn run(
                         prompts::write_prompt(&prompt_entry.text)
                     };
 
-                    let prompt_mode = if inf_mode.raw { Some("raw") } else { None };
+                    let prompt_mode_str = if inf_mode.raw { "raw" } else { "chat" };
                     let rng_seed = (pi as u64) * 1000 + seed as u64 + 42;
                     let gen_start = std::time::Instant::now();
 
-                    let result = decoding::run(
-                        &mlx_backend,
-                        &handle,
-                        &model_id,
-                        &fingerprint,
-                        &ablation_decoding,
-                        &write_prompt,
-                        system.as_deref(),
-                        Some(&adapter),
-                        prompt_mode,
-                        Some(rng_seed),
-                    )
-                    .await;
+                    let req = WorkerRequest {
+                        prompt: write_prompt,
+                        system_prompt: system,
+                        prompt_mode: prompt_mode_str.to_string(),
+                        max_tokens: cfg.decoding.max_tokens,
+                        temperature: cfg.inference.temperature,
+                        top_p: 0.92,
+                        repetition_penalty: 1.05,
+                        seed: Some(rng_seed),
+                        logit_bias: bias.clone(),
+                    };
+
+                    let result = worker.generate(&req).await;
 
                     completed_gens += 1;
                     let gen_elapsed_ms = gen_start.elapsed().as_millis() as u64;
@@ -411,50 +393,79 @@ pub async fn run(
                     write_progress(&progress_path, completed_gens, total_gens, remaining, &combo_name,
                         &format!("prompt {}/{} seed {}/{}", pi + 1, suite.prompts.len(), seed + 1, seeds))?;
 
-                    let record = match &result {
-                        Ok(r) => {
-                            let punct = PunctuationStats::compute(&r.text);
-                            let read = ReadabilityStats::compute(&r.text);
-                            let dist_report = writer_cli::stylometry::scoring::distance(&r.text, &fingerprint);
-                            let leakage = compute_canon_leakage(&r.text, &prompt_entry.text, &leakage_lexicon);
-                            let wc = r.text.split_whitespace().count();
-                            let sc = r.text.split_terminator(['.', '!', '?']).count();
+                    let record = match result {
+                        Ok(events) => {
+                            // Extract text from generation events
+                            let text = events.iter().find_map(|e| {
+                                if let writer_cli::backends::inference::response::GenerationEvent::Done { full_text, .. } = e {
+                                    Some(full_text.clone())
+                                } else {
+                                    None
+                                }
+                            }).unwrap_or_default();
 
-                            if !ctx.format.is_json() {
-                                eprintln!("    [{}/{}] {:.0}s dist={:.3} leak={:.3} | ETA {:.0}m",
-                                    completed_gens, total_gens, gen_elapsed_ms as f64 / 1000.0,
-                                    r.distance, leakage.score, remaining / 60.0);
-                            }
+                            if text.is_empty() {
+                                GenerationRecord {
+                                    training_format: ablation_cfg.name.to_string(),
+                                    inference_mode: inf_mode.name.to_string(),
+                                    prompt: prompt_entry.text.clone(),
+                                    category: bucket.clone(),
+                                    seed, rng_seed,
+                                    status: "failed".to_string(),
+                                    error: Some("Empty generation".to_string()),
+                                    text: None, style_distance: None, base_voice_distance: None,
+                                    fk_grade: None, questions_per_1k: None, exclamations_per_1k: None,
+                                    terminal_punct_dist: None, structural_punct_dist: None,
+                                    sentence_length_dist: None, function_word_cos: None,
+                                    ngram_cos: None, readability_diff: None, richness_diff: None,
+                                    slop_score: None, slop_multiplier: None,
+                                    canon_leakage_score: None, leaked_terms: None,
+                                    word_count: None, sentence_count: None,
+                                    elapsed_ms: Some(gen_elapsed_ms),
+                                }
+                            } else {
+                                let punct = PunctuationStats::compute(&text);
+                                let read = ReadabilityStats::compute(&text);
+                                let dist_report = scoring::distance(&text, &fingerprint);
+                                let leakage = compute_canon_leakage(&text, &prompt_entry.text, &leakage_lexicon);
+                                let wc = text.split_whitespace().count();
+                                let sc = text.split_terminator(['.', '!', '?']).count();
 
-                            GenerationRecord {
-                                training_format: ablation_cfg.name.to_string(),
-                                inference_mode: inf_mode.name.to_string(),
-                                prompt: prompt_entry.text.clone(),
-                                category: bucket.clone(),
-                                seed,
-                                rng_seed,
-                                status: "ok".to_string(),
-                                error: None,
-                                text: Some(r.text.clone()),
-                                style_distance: Some(r.distance),
-                                base_voice_distance: Some(dist_report.base_voice_distance),
-                                fk_grade: Some(read.flesch_kincaid_grade),
-                                questions_per_1k: Some(punct.questions_per_1k),
-                                exclamations_per_1k: Some(punct.exclamations_per_1k),
-                                terminal_punct_dist: Some(dist_report.terminal_punct_dist),
-                                structural_punct_dist: Some(dist_report.structural_punct_dist),
-                                sentence_length_dist: Some(dist_report.sentence_length_dist),
-                                function_word_cos: Some(dist_report.function_word_cos),
-                                ngram_cos: Some(dist_report.ngram_cos),
-                                readability_diff: Some(dist_report.readability_diff),
-                                richness_diff: Some(dist_report.richness_diff),
-                                slop_score: Some(dist_report.slop_score),
-                                slop_multiplier: Some(dist_report.slop_multiplier),
-                                canon_leakage_score: Some(leakage.score),
-                                leaked_terms: Some(leakage.leaked_terms),
-                                word_count: Some(wc),
-                                sentence_count: Some(sc),
-                                elapsed_ms: Some(gen_elapsed_ms),
+                                if !ctx.format.is_json() {
+                                    eprintln!("    [{}/{}] {:.0}s dist={:.3} leak={:.3} | ETA {:.0}m",
+                                        completed_gens, total_gens, gen_elapsed_ms as f64 / 1000.0,
+                                        dist_report.overall, leakage.score, remaining / 60.0);
+                                }
+
+                                GenerationRecord {
+                                    training_format: ablation_cfg.name.to_string(),
+                                    inference_mode: inf_mode.name.to_string(),
+                                    prompt: prompt_entry.text.clone(),
+                                    category: bucket.clone(),
+                                    seed, rng_seed,
+                                    status: "ok".to_string(),
+                                    error: None,
+                                    text: Some(text),
+                                    style_distance: Some(dist_report.overall),
+                                    base_voice_distance: Some(dist_report.base_voice_distance),
+                                    fk_grade: Some(read.flesch_kincaid_grade),
+                                    questions_per_1k: Some(punct.questions_per_1k),
+                                    exclamations_per_1k: Some(punct.exclamations_per_1k),
+                                    terminal_punct_dist: Some(dist_report.terminal_punct_dist),
+                                    structural_punct_dist: Some(dist_report.structural_punct_dist),
+                                    sentence_length_dist: Some(dist_report.sentence_length_dist),
+                                    function_word_cos: Some(dist_report.function_word_cos),
+                                    ngram_cos: Some(dist_report.ngram_cos),
+                                    readability_diff: Some(dist_report.readability_diff),
+                                    richness_diff: Some(dist_report.richness_diff),
+                                    slop_score: Some(dist_report.slop_score),
+                                    slop_multiplier: Some(dist_report.slop_multiplier),
+                                    canon_leakage_score: Some(leakage.score),
+                                    leaked_terms: Some(leakage.leaked_terms),
+                                    word_count: Some(wc),
+                                    sentence_count: Some(sc),
+                                    elapsed_ms: Some(gen_elapsed_ms),
+                                }
                             }
                         }
                         Err(e) => {
@@ -467,8 +478,7 @@ pub async fn run(
                                 inference_mode: inf_mode.name.to_string(),
                                 prompt: prompt_entry.text.clone(),
                                 category: bucket.clone(),
-                                seed,
-                                rng_seed,
+                                seed, rng_seed,
                                 status: "failed".to_string(),
                                 error: Some(e.to_string()),
                                 text: None, style_distance: None, base_voice_distance: None,
@@ -489,7 +499,6 @@ pub async fn run(
                 }
             }
 
-            // Compute per-combo stats with bucket breakdowns
             let combo_result = compute_combo_result(
                 ablation_cfg.name, inf_mode.name, *final_loss, &gen_records,
             );
@@ -506,6 +515,8 @@ pub async fn run(
 
             all_results.push(combo_result);
         }
+
+        // Worker is dropped here — child process exits when stdin closes
     }
 
     // ── Write per-generation records ──────────────────────────────────────
