@@ -98,7 +98,7 @@ impl Default for GenerationParams {
             top_p: 0.92,
             top_k: 64,
             max_tokens: 2048,
-            repetition_penalty: 1.15,
+            repetition_penalty: 1.3,
             contrastive_alpha: 0.0,
             kv_quant_preference: None,
         }
