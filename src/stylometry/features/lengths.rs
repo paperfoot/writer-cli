@@ -39,8 +39,8 @@ pub const HISTOGRAM_BIN_CENTERS: &[f64] =
 pub fn sentence_length_histogram(text: &str) -> Vec<f64> {
     use unicode_segmentation::UnicodeSegmentation;
 
-    let lengths: Vec<u32> = text
-        .unicode_sentences()
+    let lengths: Vec<u32> = super::sentences::split_sentences(text)
+        .iter()
         .map(|s| s.unicode_words().count() as u32)
         .filter(|&l| l > 0)
         .collect();
@@ -126,8 +126,8 @@ pub fn word_lengths(text: &str) -> LengthStats {
 }
 
 pub fn sentence_lengths(text: &str) -> LengthStats {
-    let lengths: Vec<f64> = text
-        .unicode_sentences()
+    let lengths: Vec<f64> = super::sentences::split_sentences(text)
+        .iter()
         .map(|s| s.unicode_words().count() as f64)
         .filter(|&l| l > 0.0)
         .collect();

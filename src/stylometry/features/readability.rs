@@ -22,7 +22,7 @@ pub struct ReadabilityStats {
 impl ReadabilityStats {
     pub fn compute(text: &str) -> Self {
         let words: Vec<&str> = text.unicode_words().collect();
-        let sentences = text.unicode_sentences().count() as f64;
+        let sentences = super::sentences::split_sentences(text).len() as f64;
         let word_count = words.len() as f64;
 
         if word_count == 0.0 || sentences == 0.0 {

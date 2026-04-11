@@ -13,4 +13,5 @@ pub mod ngrams;
 pub mod punctuation;
 pub mod readability;
 pub mod richness;
+pub mod sentences;
 pub mod vocabulary;
