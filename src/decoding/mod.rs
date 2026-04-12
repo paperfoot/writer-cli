@@ -153,8 +153,8 @@ pub async fn run(
             return Err(DecodingError::Backend(err_detail));
         }
 
-        // Rank candidates by stylometric distance
-        let ranked = ranker::rank(&candidates, fingerprint);
+        // Rank candidates by style distance + prompt relevance
+        let ranked = ranker::rank(&candidates, fingerprint, prompt);
 
         // Filter best candidate
         let (best_vec_idx, best_distance) = ranked[0];

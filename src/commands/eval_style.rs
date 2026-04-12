@@ -20,6 +20,7 @@ use writer_cli::stylometry::features::lengths;
 use writer_cli::stylometry::features::punctuation::PunctuationStats;
 use writer_cli::stylometry::features::readability::ReadabilityStats;
 use writer_cli::stylometry::fingerprint::StylometricFingerprint;
+use writer_cli::stylometry::relevance;
 
 use crate::config;
 use crate::error::AppError;
@@ -59,6 +60,7 @@ struct EvalRecord {
     questions_per_1k: f64,
     exclamations_per_1k: f64,
     canon_leakage_score: f64,
+    prompt_relevance: f64,
     // Generation config
     system_prompt_enabled: bool,
     prompt_wrapping_enabled: bool,
@@ -82,6 +84,7 @@ struct EvalSummary {
     mean_questions_per_1k: f64,
     mean_exclamations_per_1k: f64,
     mean_canon_leakage: f64,
+    mean_prompt_relevance: f64,
     raw_mode: bool,
     adapter_used: bool,
     model: String,
@@ -245,6 +248,7 @@ pub async fn run(
             let punct = PunctuationStats::compute(&text);
             let read = ReadabilityStats::compute(&text);
             let canon_leakage = compute_canon_leakage(&text, &prompt_entry.text, &leakage_lexicon);
+            let prompt_rel = relevance::score(&prompt_entry.text, &text);
 
             let record = EvalRecord {
                 prompt: prompt_entry.text.clone(),
@@ -258,6 +262,7 @@ pub async fn run(
                 questions_per_1k: punct.questions_per_1k,
                 exclamations_per_1k: punct.exclamations_per_1k,
                 canon_leakage_score: canon_leakage,
+                prompt_relevance: prompt_rel,
                 system_prompt_enabled: system.is_some(),
                 prompt_wrapping_enabled: !raw,
                 raw_mode: raw,
@@ -329,6 +334,10 @@ pub async fn run(
             summary.mean_questions_per_1k, summary.mean_exclamations_per_1k
         );
         println!("  mean canon leakage: {:.3}", summary.mean_canon_leakage);
+        println!(
+            "  mean prompt relevance: {:.3}",
+            summary.mean_prompt_relevance
+        );
         println!("\n  results: {}", output_dir.display().to_string().dimmed());
     } else {
         crate::output::print_success_or(ctx, &summary, |_| {});
@@ -425,13 +434,13 @@ fn contains_whole_word(needle: &str, haystack: &str) -> bool {
 
 fn write_csv(path: &Path, records: &[EvalRecord]) -> Result<(), AppError> {
     let mut out = String::new();
-    out.push_str("prompt,category,seed,style_distance,sentence_length_mean,sentence_length_sd,fk_grade,questions_per_1k,exclamations_per_1k,canon_leakage_score,system_prompt,prompt_wrapping,raw_mode,adapter,n_candidates,model\n");
+    out.push_str("prompt,category,seed,style_distance,sentence_length_mean,sentence_length_sd,fk_grade,questions_per_1k,exclamations_per_1k,canon_leakage_score,prompt_relevance,system_prompt,prompt_wrapping,raw_mode,adapter,n_candidates,model\n");
 
     for r in records {
         // CSV-escape the prompt
         let prompt_escaped = r.prompt.replace('"', "\"\"");
         out.push_str(&format!(
-            "\"{}\",\"{}\",{},{:.4},{:.2},{:.2},{:.2},{:.2},{:.2},{:.4},{},{},{},{},{},{}\n",
+            "\"{}\",\"{}\",{},{:.4},{:.2},{:.2},{:.2},{:.2},{:.2},{:.4},{:.4},{},{},{},{},{},{}\n",
             prompt_escaped,
             r.category,
             r.seed,
@@ -442,6 +451,7 @@ fn write_csv(path: &Path, records: &[EvalRecord]) -> Result<(), AppError> {
             r.questions_per_1k,
             r.exclamations_per_1k,
             r.canon_leakage_score,
+            r.prompt_relevance,
             r.system_prompt_enabled,
             r.prompt_wrapping_enabled,
             r.raw_mode,
@@ -477,6 +487,7 @@ fn compute_summary(
             mean_questions_per_1k: 0.0,
             mean_exclamations_per_1k: 0.0,
             mean_canon_leakage: 0.0,
+            mean_prompt_relevance: 0.0,
             raw_mode: raw,
             adapter_used: adapter,
             model: model_id.to_string(),
@@ -507,6 +518,7 @@ fn compute_summary(
         mean_questions_per_1k: records.iter().map(|r| r.questions_per_1k).sum::<f64>() / n,
         mean_exclamations_per_1k: records.iter().map(|r| r.exclamations_per_1k).sum::<f64>() / n,
         mean_canon_leakage: records.iter().map(|r| r.canon_leakage_score).sum::<f64>() / n,
+        mean_prompt_relevance: records.iter().map(|r| r.prompt_relevance).sum::<f64>() / n,
         raw_mode: raw,
         adapter_used: adapter,
         model: model_id.to_string(),
