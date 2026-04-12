@@ -51,9 +51,9 @@ def main():
     lora_rank = config.get("lora_rank", 16)
     lora_scale = config.get("lora_scale", 2.0)
 
-    # Try mlx-tune first (has DPO/SimPO support), fall back to manual implementation
+    # Try mlx-tune first (has DPO/SimPO support with MoE gradient handling)
     try:
-        from mlx_tune import SimPOTrainer, DPOTrainer, TrainingArguments
+        import mlx_tune  # noqa: F401 — just check availability
         _train_with_mlx_tune(
             model_path=model_path,
             dataset_path=dataset_path,
@@ -92,8 +92,128 @@ def main():
 
 
 def _train_with_mlx_tune(**kwargs):
-    """Train using the mlx-tune package (preferred, has native SimPO)."""
-    raise ImportError("mlx-tune integration not yet wired")
+    """Train using the mlx-tune package (preferred, has native SimPO for MoE)."""
+    from mlx_tune import (
+        FastVisionModel,
+        SimPOConfig, SimPOTrainer,
+        DPOConfig, DPOTrainer,
+    )
+
+    model_path = kwargs["model_path"]
+    dataset_path = kwargs["dataset_path"]
+    adapter_out = kwargs["adapter_out"]
+    resume_adapter = kwargs.get("resume_adapter")
+    method = kwargs.get("method", "simpo")
+    beta = kwargs.get("beta", 0.1)
+    gamma = kwargs.get("gamma", 1.0)
+    learning_rate = kwargs.get("learning_rate", 1e-6)
+    batch_size = kwargs.get("batch_size", 1)
+    max_steps = kwargs.get("max_steps", 500)
+    max_seq_len = kwargs.get("max_seq_len", 2048)
+    lora_rank = kwargs.get("lora_rank", 16)
+    lora_scale = kwargs.get("lora_scale", 2.0)
+
+    sys.stderr.write(f"Loading model via mlx-tune: {model_path}\n")
+    sys.stderr.flush()
+
+    # Gemma 4 is treated as VLM in mlx-tune
+    model, tokenizer = FastVisionModel.from_pretrained(model_path)
+
+    # Load SFT adapter weights if provided
+    if resume_adapter:
+        import mlx.core as mx
+        adapter_file = os.path.join(resume_adapter, "adapters.safetensors")
+        if os.path.exists(adapter_file):
+            sys.stderr.write(f"Loading SFT adapter from {adapter_file}\n")
+            weights = mx.load(adapter_file)
+            model.load_weights(list(weights.items()))
+
+    # Prepare preference dataset from our JSONL format
+    # mlx-tune expects {"prompt": ..., "chosen": ..., "rejected": ...}
+    import json as _json
+    pairs = []
+    with open(dataset_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                pair = _json.loads(line)
+                pairs.append({
+                    "prompt": pair["prompt"],
+                    "chosen": pair["chosen"],
+                    "rejected": pair["rejected"],
+                })
+
+    sys.stderr.write(f"Loaded {len(pairs)} preference pairs\n")
+    sys.stderr.write(f"Method: {method}, beta={beta}, gamma={gamma}, lr={learning_rate}\n")
+    sys.stderr.flush()
+
+    # Write temp dataset file for mlx-tune
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as tf:
+        for pair in pairs:
+            tf.write(_json.dumps(pair) + "\n")
+        temp_dataset = tf.name
+
+    try:
+        if method == "simpo":
+            config = SimPOConfig(
+                beta=beta,
+                gamma=gamma,
+                output_dir=adapter_out,
+                learning_rate=learning_rate,
+                per_device_train_batch_size=batch_size,
+                max_steps=max_steps,
+                max_seq_length=max_seq_len,
+                logging_steps=10,
+                save_steps=max_steps,  # Save only at end
+                warmup_steps=min(10, max_steps // 10),
+            )
+            trainer = SimPOTrainer(
+                model=model,
+                tokenizer=tokenizer,
+                args=config,
+                train_dataset=temp_dataset,
+            )
+        else:
+            config = DPOConfig(
+                beta=beta,
+                output_dir=adapter_out,
+                learning_rate=learning_rate,
+                per_device_train_batch_size=batch_size,
+                max_steps=max_steps,
+                max_seq_length=max_seq_len,
+                logging_steps=10,
+                save_steps=max_steps,
+                warmup_steps=min(10, max_steps // 10),
+            )
+            trainer = DPOTrainer(
+                model=model,
+                tokenizer=tokenizer,
+                args=config,
+                train_dataset=temp_dataset,
+            )
+
+        # Train — mlx-tune handles MoE gradient routing correctly
+        trainer.train()
+
+        sys.stderr.write(f"Training complete. Adapter saved to {adapter_out}\n")
+        sys.stderr.flush()
+
+        # Write final progress line for Rust to parse
+        progress = {
+            "step": max_steps,
+            "total_steps": max_steps,
+            "loss": 0.0,
+            "learning_rate": learning_rate,
+            "chosen_reward": 0.0,
+            "rejected_reward": 0.0,
+            "reward_margin": 0.0,
+        }
+        sys.stdout.write(_json.dumps(progress) + "\n")
+        sys.stdout.flush()
+
+    finally:
+        os.unlink(temp_dataset)
 
 
 def _train_builtin(**kwargs):
@@ -137,11 +257,12 @@ def _train_builtin(**kwargs):
         lora_config = {"rank": lora_rank, "scale": lora_scale, "dropout": 0.0}
         linear_to_lora_layers(model, 16, lora_config)
 
-    # Freeze non-LoRA parameters
-    model.freeze()
-    for name, param in model.named_parameters():
-        if "lora" in name.lower():
-            param.requires_grad = True
+    # LoRA layers are already trainable from load() with adapter_path.
+    # Count trainable params for logging.
+    trainable = model.trainable_parameters()
+    n_trainable = sum(p.size for _, p in nn.utils.tree_flatten(trainable))
+    sys.stderr.write(f"Trainable parameters: {n_trainable:,}\n")
+    sys.stderr.flush()
 
     # Load preference dataset
     pairs = []
@@ -210,12 +331,11 @@ def _train_builtin(**kwargs):
             )
             sys.stderr.flush()
 
-    # Save adapter
+    # Save adapter — extract LoRA weights from the parameter tree
     os.makedirs(adapter_out, exist_ok=True)
-    # Save only LoRA weights
-    lora_weights = {
-        k: v for k, v in model.parameters().items() if "lora" in k.lower()
-    }
+    lora_weights = {}
+    for name, param in nn.utils.tree_flatten(model.trainable_parameters()):
+        lora_weights[name] = param
     mx.save_safetensors(os.path.join(adapter_out, "adapters.safetensors"), lora_weights)
 
     sys.stderr.write(f"Adapter saved to {adapter_out}\n")
@@ -265,14 +385,27 @@ def _compute_preference_loss(model, chosen_ids, rejected_ids, method, beta, gamm
             margin = chosen_avg_logp - rejected_avg_logp
             loss = -mx.log(mx.sigmoid(beta * margin))
 
-        return loss, {
-            "chosen_reward": chosen_avg_logp,
-            "rejected_reward": rejected_avg_logp,
-            "margin": margin,
-        }
+        return loss
 
-    # Compute loss and gradients
-    (loss_val, metrics), grads = nn.value_and_grad(model, lambda m: loss_fn(m))(model)
+    # nn.value_and_grad returns a function that computes (loss, grads)
+    loss_and_grad_fn = nn.value_and_grad(model, loss_fn)
+    loss_val, grads = loss_and_grad_fn(model)
+
+    # Compute metrics from a separate forward pass (cheap, no grad graph)
+    chosen_logits = model(chosen_ids[None, :-1])
+    chosen_lp = -nn.losses.cross_entropy(
+        chosen_logits.squeeze(0), chosen_ids[1:], reduction="none"
+    ).mean()
+    rejected_logits = model(rejected_ids[None, :-1])
+    rejected_lp = -nn.losses.cross_entropy(
+        rejected_logits.squeeze(0), rejected_ids[1:], reduction="none"
+    ).mean()
+
+    metrics = {
+        "chosen_reward": chosen_lp,
+        "rejected_reward": rejected_lp,
+        "margin": chosen_lp - rejected_lp,
+    }
 
     return loss_val, grads, metrics
 
