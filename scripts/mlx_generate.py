@@ -72,6 +72,28 @@ def build_logits_processor(logit_bias, tokenizer):
     return processor
 
 
+def _make_repetition_processor(penalty, context_size=100):
+    """Build a logits processor that penalises recently generated tokens."""
+    import mlx.core as mx
+
+    generated_tokens = []
+
+    def processor(tokens, logits):
+        generated_tokens.append(int(tokens[-1]) if tokens.size > 0 else 0)
+        recent = generated_tokens[-context_size:]
+        if recent:
+            ids = mx.array(list(set(recent)), dtype=mx.int32)
+            penalties = mx.where(
+                logits[..., ids] > 0,
+                logits[..., ids] / penalty,
+                logits[..., ids] * penalty,
+            )
+            logits[..., ids] = penalties
+        return logits
+
+    return processor
+
+
 def main():
     req = json.loads(sys.stdin.read())
 
@@ -118,15 +140,19 @@ def main():
                 formatted += system_prompt + "\n\n"
             formatted += prompt_text
 
-    sampler = make_sampler(
-        temp=temperature,
-        top_p=top_p,
-        repetition_penalty=repetition_penalty if repetition_penalty > 1.0 else None,
-        repetition_context_size=100,
-    )
+    sampler = make_sampler(temp=temperature, top_p=top_p)
 
     # Build logits processor for vocabulary bias
     logits_processor = build_logits_processor(logit_bias, tokenizer)
+
+    # Chain repetition penalty as a logits processor
+    processors = []
+    if repetition_penalty > 1.0:
+        processors.append(
+            _make_repetition_processor(repetition_penalty, context_size=100)
+        )
+    if logits_processor is not None:
+        processors.append(logits_processor)
 
     t0 = time.time()
 
@@ -134,8 +160,8 @@ def main():
         max_tokens=max_tokens,
         sampler=sampler,
     )
-    if logits_processor is not None:
-        gen_kwargs["logits_processors"] = [logits_processor]
+    if processors:
+        gen_kwargs["logits_processors"] = processors
 
     full_text = ""
     last_resp = None
