@@ -13,6 +13,10 @@ pub struct FilterResult {
 
 /// Detect repetition collapse by checking for repeated n-grams.
 /// Returns 0.0 (no repetition) to 1.0 (fully repeated).
+pub fn repetition_ratio(text: &str) -> f64 {
+    detect_repetition(text)
+}
+
 fn detect_repetition(text: &str) -> f64 {
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.len() < 20 {

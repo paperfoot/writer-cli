@@ -33,6 +33,7 @@ struct MlxRequest {
     max_tokens: u32,
     temperature: f32,
     top_p: f32,
+    min_p: f32,
     repetition_penalty: f32,
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
     logit_bias: std::collections::HashMap<String, f32>,
@@ -139,6 +140,7 @@ impl MlxBackend {
             max_tokens: request.params.max_tokens,
             temperature: request.params.temperature,
             top_p: request.params.top_p,
+            min_p: request.params.min_p,
             repetition_penalty: request.params.repetition_penalty,
             logit_bias: request.logit_bias.clone(),
             seed: request.seed,

@@ -157,26 +157,26 @@ pub async fn run(
         // Rank candidates by style distance + prompt relevance
         let ranked = ranker::rank(&candidates, fingerprint, prompt);
 
-        // Filter best candidate
-        let (best_vec_idx, best_distance) = ranked[0];
-        let (ref best_text, tokens, elapsed) = candidates[best_vec_idx];
-        // Map back to the real backend candidate index
-        let best_backend_idx = backend_indices[best_vec_idx] as usize;
+        // Scan ALL ranked candidates for the first one that passes the filter.
+        // Previously we only checked ranked[0] and discarded the rest.
+        for &(vec_idx, score) in &ranked {
+            let (ref text, tokens, elapsed) = candidates[vec_idx];
+            let filter_result = filter::check(text, fingerprint, config);
 
-        let filter_result = filter::check(best_text, fingerprint, config);
-
-        if filter_result.passed || attempt == max_attempts - 1 {
-            return Ok(GenerationResult {
-                text: best_text.clone(),
-                distance: best_distance,
-                candidate_index: best_backend_idx,
-                candidates_generated: candidates.len(),
-                tokens_generated: tokens,
-                elapsed_ms: elapsed,
-                regenerations: attempt,
-            });
+            if filter_result.passed || attempt == max_attempts - 1 {
+                let backend_idx = backend_indices[vec_idx] as usize;
+                return Ok(GenerationResult {
+                    text: text.clone(),
+                    distance: score,
+                    candidate_index: backend_idx,
+                    candidates_generated: candidates.len(),
+                    tokens_generated: tokens,
+                    elapsed_ms: elapsed,
+                    regenerations: attempt,
+                });
+            }
         }
-        // Otherwise, loop and regenerate
+        // All candidates failed filter — regenerate
     }
 
     Err(DecodingError::AllRejected(max_attempts))

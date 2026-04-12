@@ -29,23 +29,13 @@ pub fn from_fingerprint(fp: &StylometricFingerprint, config: &DecodingConfig) ->
             .or_insert(config.banned_word_bias);
     }
 
-    // Boost preferred words (user's distinctive vocabulary)
-    for (word, _freq) in &fp.preferred_words {
-        bias.insert(word.clone(), config.preferred_word_bias);
-    }
-
-    // Boost punctuation tokens that the fingerprint uses but the model underproduces.
-    // The ablation showed 0.0 exclamations/1k vs 5.24 target — the model never uses "!".
-    // Token-level bias on punctuation marks closes the structural gap.
-    if fp.punctuation.exclamations_per_1k > 1.0 {
-        bias.insert("!".to_string(), config.preferred_word_bias * 0.5);
-    }
-    if fp.punctuation.questions_per_1k > 1.0 {
-        bias.insert("?".to_string(), config.preferred_word_bias * 0.3);
-    }
-    // Em-dashes if the author uses them frequently
+    // Positive boosting removed per GPT Pro review (arXiv:2205.11503, Stamatatos survey):
+    // preferred_words contains canon-heavy content words (arthur, zaphod, universe)
+    // that help leakage more than style. Punctuation boosts were overshooting
+    // targets (17.2 Q/1k vs 8.95 target, 10.6 !/1k vs 5.24 target).
+    // Only em-dash gets a small boost — it's structural, not content.
     if fp.punctuation.em_dashes_per_1k > 2.0 {
-        bias.insert("—".to_string(), config.preferred_word_bias * 0.3);
+        bias.insert("—".to_string(), config.preferred_word_bias * 0.2);
     }
 
     bias

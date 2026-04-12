@@ -32,9 +32,17 @@ pub struct InferenceConfig {
     pub temperature: f32,
     pub max_tokens: u32,
     pub ollama_url: String,
+    /// Min-p sampling threshold (arXiv:2407.01082). Dynamic nucleus based on
+    /// top token probability. 0.0 = disabled, 0.05 = recommended default.
+    #[serde(default = "default_min_p")]
+    pub min_p: f32,
     /// Prompt mode for inference: "chat" (default) or "raw".
     /// In raw mode, mlx_generate.py bypasses chat template and sends prompt verbatim.
     pub prompt_mode: PromptMode,
+}
+
+fn default_min_p() -> f32 {
+    0.05
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +134,7 @@ impl Default for InferenceConfig {
             temperature: 0.7,
             max_tokens: 2048,
             ollama_url: "http://localhost:11434".into(),
+            min_p: 0.05,
             prompt_mode: PromptMode::default(),
         }
     }

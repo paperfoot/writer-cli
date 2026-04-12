@@ -1,16 +1,19 @@
-//! Rank generated candidates by combined style fidelity and prompt relevance.
+//! Rank generated candidates by multi-objective scoring.
 //!
-//! Reference: PAN authorship verification — cosine/distance-based ranking.
+//! Per GPT Pro review (Prompt-and-Rerank, arXiv:2205.11503, PAN systems):
+//! decompose into base voice distance, relevance, slop, and repetition
+//! rather than a single combined score.
 use crate::stylometry::fingerprint::StylometricFingerprint;
 use crate::stylometry::{relevance, scoring};
 
-/// Rank candidates by combined score: style distance penalized by low relevance.
+use super::filter;
+
+/// Rank candidates by multi-objective score (lower = better).
 ///
-/// Scoring: `combined = style_distance + relevance_penalty`
-/// where `relevance_penalty = (1.0 - relevance) * 0.3`
-///
-/// This means: a perfectly relevant but stylistically distant candidate (0.6 + 0.0)
-/// beats an off-topic but well-styled candidate (0.3 + 0.3).
+/// Score = base_voice_distance
+///       + 0.25 * (1 - relevance)^2    — squared penalty for off-topic
+///       + 0.10 * slop_score            — AI-tell penalty
+///       + 0.10 * repetition_ratio      — soft repetition penalty
 ///
 /// Returns vec of (candidate_index, combined_score), sorted lowest first.
 pub fn rank(
@@ -24,10 +27,15 @@ pub fn rank(
         .map(|(i, (text, _, _))| {
             let report = scoring::distance(text, fingerprint);
             let rel = relevance::score(prompt, text);
-            // Penalty: up to 0.3 for completely irrelevant output
-            let relevance_penalty = (1.0 - rel) * 0.3;
-            let combined = (report.overall + relevance_penalty).clamp(0.0, 1.0);
-            (i, combined)
+            let rep = filter::repetition_ratio(text);
+
+            // Multi-objective combination
+            let combined = report.base_voice_distance
+                + 0.25 * (1.0 - rel).powi(2)  // squared: mild penalty for partial relevance
+                + 0.10 * report.slop_score     // direct slop penalty
+                + 0.10 * rep;                  // soft repetition penalty
+
+            (i, combined.clamp(0.0, 1.5))
         })
         .collect();
 

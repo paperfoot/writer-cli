@@ -1,15 +1,11 @@
 //! Prompt templates with stylometric priming.
 //!
-//! Inject a small fingerprint summary into the system prompt so the model
-//! has a concrete target for sentence rhythm and vocabulary.
+//! Register-style descriptors per GPT Pro review (Prompt-and-Rerank, arXiv:2205.11503).
+//! Natural-language style descriptors outperform metric sheets.
 use crate::stylometry::fingerprint::StylometricFingerprint;
 
 /// Build a system prompt that primes the model with the user's stylometric profile.
-///
-/// The prompt encodes measurable voice features from the fingerprint so the model
-/// has a concrete target for rhythm, punctuation, and vocabulary.
 pub fn system_prompt(fingerprint: &StylometricFingerprint) -> String {
-    let avg_word_len = fingerprint.word_length.mean;
     let avg_sent_len = fingerprint.sentence_length.mean;
     let sent_sd = fingerprint.sentence_length.sd;
 
@@ -19,59 +15,42 @@ pub fn system_prompt(fingerprint: &StylometricFingerprint) -> String {
         .take(8)
         .map(|(w, _)| w.as_str())
         .collect();
-    let preferred_str = if preferred.is_empty() {
-        "none identified".to_string()
-    } else {
-        preferred.join(", ")
-    };
+    let preferred_str = preferred.join(", ");
 
-    // Build punctuation guidance from actual fingerprint rates
-    let mut punct_notes = Vec::new();
-    if fingerprint.punctuation.questions_per_1k > 2.0 {
-        punct_notes.push(format!(
-            "Ask rhetorical questions (~{:.0} per 1000 words)",
-            fingerprint.punctuation.questions_per_1k
-        ));
-    }
-    if fingerprint.punctuation.exclamations_per_1k > 1.0 {
-        punct_notes.push(format!(
-            "Use exclamations for emphasis (~{:.0} per 1000 words)",
-            fingerprint.punctuation.exclamations_per_1k
-        ));
-    }
-    if fingerprint.punctuation.em_dashes_per_1k > 2.0 {
-        punct_notes.push("Use em-dashes for asides and interruptions".to_string());
-    }
-
-    let punct_section = if punct_notes.is_empty() {
-        String::new()
-    } else {
+    let mut notes = vec![
+        "Match the author's rhythm and register, not the training corpus subject matter."
+            .to_string(),
         format!(
-            "\n{}",
-            punct_notes
-                .iter()
-                .map(|n| format!("- {n}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    };
+            "Alternate clipped sentences ({:.0}-word fragments) with longer flowing ones.",
+            (avg_sent_len - sent_sd).max(1.0)
+        ),
+        "Prefer concrete, everyday diction over abstract jargon.".to_string(),
+    ];
 
-    format!(
-        "You are a writer with a distinctive voice. Your writing tends to:\n\
-         - Mix very short sentences ({:.0}-word fragments) with longer flowing ones (SD {:.1})\n\
-         - Favor simple, concrete words (average {avg_word_len:.1} chars per word)\n\
-         - Average sentence length around {avg_sent_len:.0} words, but vary widely\
-         {punct_section}\n\
-         - Words you favor: {preferred_str}\n\
-         \n\
-         Avoid these AI-sounding words and phrases: delve, tapestry, landscape, \
-         leverage, nuance, multifaceted, holistic, pivotal, \
-         it's worth noting, in today's world, the intersection of.\n\
-         \n\
-         Write naturally. Output only the requested text.",
-        (avg_sent_len - sent_sd).max(1.0),
-        sent_sd,
-    )
+    if fingerprint.punctuation.em_dashes_per_1k > 2.0 {
+        notes.push("Use occasional em-dash asides.".to_string());
+    }
+
+    notes.push(
+        "Use asides sparingly; punctuation should feel incidental, not performative.".to_string(),
+    );
+
+    if !preferred_str.is_empty() {
+        notes.push(format!("Words you naturally reach for: {preferred_str}."));
+    }
+
+    notes.push(
+        "Avoid these AI-sounding words: delve, tapestry, landscape, leverage, nuance, \
+         multifaceted, holistic, pivotal."
+            .to_string(),
+    );
+    notes.push(
+        "Do not reuse recurring names or universe-specific nouns unless the user asks for them."
+            .to_string(),
+    );
+    notes.push("Keep the answer on-topic. Output only the requested text.".to_string());
+
+    notes.join("\n")
 }
 
 /// Build a write prompt.

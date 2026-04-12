@@ -132,6 +132,7 @@ def main():
             max_tokens = req.get("max_tokens", 2048)
             temperature = req.get("temperature", 0.7)
             top_p = req.get("top_p", 0.92)
+            min_p = req.get("min_p", 0.05)
             repetition_penalty = req.get("repetition_penalty", 1.05)
             logit_bias = req.get("logit_bias")
             seed = req.get("seed")
@@ -159,7 +160,7 @@ def main():
                         formatted += system_prompt + "\n\n"
                     formatted += prompt_text
 
-            sampler = make_sampler(temp=temperature, top_p=top_p)
+            sampler = make_sampler(temp=temperature, top_p=top_p, min_p=min_p)
             logits_processor = build_logits_processor(logit_bias, tokenizer)
 
             # Chain repetition penalty as a logits processor
