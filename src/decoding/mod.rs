@@ -72,6 +72,7 @@ pub async fn run(
             .with_logit_bias(bias)
             .with_n_candidates(config.n_candidates);
         req.params.max_tokens = config.max_tokens;
+        req.params.repetition_penalty = config.repetition_penalty;
 
         if let Some(adapter) = adapter {
             req = req.with_adapter(adapter.clone());

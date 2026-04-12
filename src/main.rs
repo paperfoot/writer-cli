@@ -78,6 +78,21 @@ async fn main() {
             raw,
             output,
         } => commands::eval_style::run(ctx, suite, seeds, adapter, raw, output).await,
+        Commands::GeneratePairs {
+            suite,
+            candidates,
+            seeds,
+            min_margin,
+            output,
+        } => commands::generate_pairs::run(ctx, suite, candidates, seeds, min_margin, output).await,
+        Commands::TrainDpo {
+            pairs,
+            method,
+            lr,
+            steps,
+            gamma,
+            beta,
+        } => commands::train_dpo::run(ctx, pairs, method, lr, steps, gamma, beta).await,
         Commands::BuildLexicon {
             profile,
             min_count,

@@ -62,7 +62,7 @@ fn toml_serialize(config: &AppConfig) -> Result<String, AppError> {
         "active_profile = \"{}\"\nbase_model = \"{}\"\n\n\
          [update]\nenabled = {}\nowner = \"{}\"\nrepo = \"{}\"\n\n\
          [inference]\nbackend = \"{}\"\ntemperature = {}\nmax_tokens = {}\nollama_url = \"{}\"\nprompt_mode = \"{:?}\"\n\n\
-         [decoding]\nn_candidates = {}\ncontrastive_alpha = {}\nbanned_word_bias = {}\npreferred_word_bias = {}\nkv_quant = \"{}\"\n\n\
+         [decoding]\nn_candidates = {}\nrepetition_penalty = {}\ncontrastive_alpha = {}\nbanned_word_bias = {}\npreferred_word_bias = {}\nkv_quant = \"{}\"\n\n\
          [training]\nbackend = \"{}\"\nrank = {}\nalpha = {}\nlearning_rate = {}\nbatch_size = {}\nmax_steps = {}\nmax_seq_len = {}\ndataset_format = \"{:?}\"\nmask_prompt = {}\n",
         config.active_profile,
         config.base_model,
@@ -75,6 +75,7 @@ fn toml_serialize(config: &AppConfig) -> Result<String, AppError> {
         config.inference.ollama_url,
         config.inference.prompt_mode,
         config.decoding.n_candidates,
+        config.decoding.repetition_penalty,
         config.decoding.contrastive_alpha,
         config.decoding.banned_word_bias,
         config.decoding.preferred_word_bias,

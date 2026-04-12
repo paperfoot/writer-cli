@@ -25,14 +25,28 @@ pub struct LoraConfig {
     pub mask_prompt: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PreferenceMethod {
+    #[default]
+    Simpo,
+    Dpo,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DpoConfig {
     pub profile: String,
     pub base_model: ModelId,
     pub preference_dataset: PathBuf,
     pub adapter_out: PathBuf,
+    /// Path to the SFT adapter to continue training from.
     pub base_adapter: Option<PathBuf>,
+    /// Preference optimization method.
+    pub method: PreferenceMethod,
+    /// KL penalty coefficient (DPO) or reward margin (SimPO gamma).
     pub beta: f32,
+    /// SimPO gamma — target reward margin between chosen and rejected.
+    pub gamma: f32,
     pub learning_rate: f32,
     pub batch_size: u16,
     pub max_steps: u32,

@@ -125,6 +125,56 @@ pub enum Commands {
         eval_only: bool,
     },
 
+    /// Generate preference pairs for SimPO/DPO training
+    GeneratePairs {
+        /// Path to prompt suite YAML
+        #[arg(long, default_value = "prompts.yaml")]
+        suite: std::path::PathBuf,
+
+        /// Candidates per prompt (scored and paired)
+        #[arg(long, default_value = "4")]
+        candidates: u16,
+
+        /// Seeds per prompt
+        #[arg(long, default_value = "3")]
+        seeds: u16,
+
+        /// Minimum margin between chosen and rejected (stylometric distance)
+        #[arg(long, default_value = "0.08")]
+        min_margin: f64,
+
+        /// Output JSONL file for preference pairs
+        #[arg(long, short = 'o', default_value = "preference_pairs.jsonl")]
+        output: std::path::PathBuf,
+    },
+
+    /// Train SimPO/DPO on preference pairs
+    TrainDpo {
+        /// Path to preference pairs JSONL
+        #[arg(long, default_value = "preference_pairs.jsonl")]
+        pairs: std::path::PathBuf,
+
+        /// Preference method: simpo or dpo
+        #[arg(long, default_value = "simpo")]
+        method: String,
+
+        /// Learning rate (default: 1e-6)
+        #[arg(long, default_value = "1e-6")]
+        lr: f32,
+
+        /// Training steps
+        #[arg(long, default_value = "500")]
+        steps: u32,
+
+        /// SimPO gamma (reward margin)
+        #[arg(long, default_value = "1.0")]
+        gamma: f32,
+
+        /// DPO beta (KL penalty)
+        #[arg(long, default_value = "0.1")]
+        beta: f32,
+    },
+
     /// Extract canon lexicon (named entities + high-PMI terms) from corpus
     BuildLexicon {
         /// Profile to extract from (defaults to active)

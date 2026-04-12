@@ -45,13 +45,19 @@ pub struct DecodingConfig {
     /// None = default (3). Set to 1 for ablation runs.
     #[serde(default)]
     pub max_attempts: Option<u16>,
+    /// Repetition penalty for MLX generation. Values > 1.0 penalise
+    /// repeated tokens. Set to 1.0 to disable.
+    #[serde(default = "default_repetition_penalty")]
+    pub repetition_penalty: f32,
     /// Contrastive alpha for CoPe-style decoding. Set to 0.0 to disable.
-    /// Requires a contrastive_base model to be specified in generation request.
-    /// Currently only supported by Ollama backend.
     pub contrastive_alpha: f32,
     pub banned_word_bias: f32,
     pub preferred_word_bias: f32,
     pub kv_quant: String,
+}
+
+fn default_repetition_penalty() -> f32 {
+    1.3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,7 +137,8 @@ impl Default for DecodingConfig {
             n_candidates: 8,
             max_tokens: 4096,
             max_attempts: None,
-            contrastive_alpha: 0.0, // disabled until contrastive_base model is wired
+            repetition_penalty: 1.3,
+            contrastive_alpha: 0.0, // disabled until contrastive decoding is wired
             banned_word_bias: -4.0,
             preferred_word_bias: 1.5,
             kv_quant: "auto".into(),
@@ -145,15 +152,16 @@ impl Default for TrainingConfig {
             backend: "mlx-tune".into(),
             rank: 16,
             alpha: 32.0,
-            // Conservative defaults for large models (26B).
-            // Gemma 4 26B: batch=1, seq=2048, lr=2e-5.
-            // Smaller models can use batch=4, lr=1e-4.
-            learning_rate: 2e-5,
+            // Tuned defaults for Gemma 4 26B MoE on Apple Silicon.
+            // LR 5e-5 (research suggests 2e-5 is too conservative for 26B LoRA).
+            // 1000 steps (~2.3 epochs on 441 samples) — monitor val loss for overfitting.
+            // mask_prompt=true focuses learning on the writing, not canned prompts.
+            learning_rate: 5e-5,
             batch_size: 1,
-            max_steps: 500,
+            max_steps: 1000,
             max_seq_len: 2048,
             dataset_format: DatasetFormat::default(),
-            mask_prompt: false,
+            mask_prompt: true,
         }
     }
 }

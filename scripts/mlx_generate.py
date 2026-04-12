@@ -118,7 +118,12 @@ def main():
                 formatted += system_prompt + "\n\n"
             formatted += prompt_text
 
-    sampler = make_sampler(temp=temperature, top_p=top_p)
+    sampler = make_sampler(
+        temp=temperature,
+        top_p=top_p,
+        repetition_penalty=repetition_penalty if repetition_penalty > 1.0 else None,
+        repetition_context_size=100,
+    )
 
     # Build logits processor for vocabulary bias
     logits_processor = build_logits_processor(logit_bias, tokenizer)

@@ -385,7 +385,7 @@ pub async fn run(
                         max_tokens: cfg.decoding.max_tokens,
                         temperature: cfg.inference.temperature,
                         top_p: 0.92,
-                        repetition_penalty: 1.05,
+                        repetition_penalty: cfg.decoding.repetition_penalty,
                         seed: Some(rng_seed),
                         logit_bias: bias.clone(),
                     };

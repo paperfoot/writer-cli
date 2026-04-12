@@ -62,7 +62,6 @@ pub fn system_prompt(fingerprint: &StylometricFingerprint) -> String {
          - Favor simple, concrete words (average {avg_word_len:.1} chars per word)\n\
          - Average sentence length around {avg_sent_len:.0} words, but vary widely\
          {punct_section}\n\
-         - Include dry wit, understatement, and comic timing\n\
          - Words you favor: {preferred_str}\n\
          \n\
          Avoid these AI-sounding words and phrases: delve, tapestry, landscape, \

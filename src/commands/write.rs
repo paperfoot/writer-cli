@@ -74,20 +74,18 @@ pub async fn run(
     let profile_dir = config::profiles_dir().join(&cfg.active_profile);
     let adapter = detect_adapter(&profile_dir);
 
-    // Choose backend: MLX when adapter present (safetensors), Ollama otherwise
+    // Choose backend: MLX when adapter present (safetensors), Ollama otherwise.
+    // If adapter exists but MLX is unavailable, fail loudly — silent fallback
+    // to Ollama would run without voice adaptation.
     let (backend_box, backend_name): (Box<dyn InferenceBackend>, &str) = if adapter.is_some() {
         match MlxBackend::new() {
             Ok(mlx) => (Box::new(mlx), "mlx"),
             Err(e) => {
-                eprintln!(
-                    "Warning: adapter found but MLX backend unavailable ({e}), falling back to Ollama"
-                );
-                let ollama = OllamaBackend::new(&cfg.inference.ollama_url);
-                ollama
-                    .ping()
-                    .await
-                    .map_err(|e| AppError::Transient(e.to_string()))?;
-                (Box::new(ollama), "ollama")
+                return Err(AppError::Config(format!(
+                    "LoRA adapter found but MLX backend unavailable: {e}. \
+                     Install mlx-lm (pip install mlx-lm) or remove the adapter \
+                     to use Ollama without voice adaptation."
+                )));
             }
         }
     } else {
