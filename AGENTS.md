@@ -1,6 +1,6 @@
 # AGENTS.md -- Instructions for AI Agents
 
-You are working inside `writer`, a Rust CLI built on the [agent-cli-framework](https://github.com/199-biotechnologies/agent-cli-framework). Follow these rules.
+You are working inside `writer`, a Rust CLI built on the [agent-cli-framework](https://github.com/paperfoot/agent-cli-framework). Follow these rules.
 
 ## Spirit
 
@@ -78,5 +78,5 @@ cargo test
 
 ## Reference
 
-- [agent-cli-framework README](https://github.com/199-biotechnologies/agent-cli-framework) -- the full pattern catalogue
-- [agent-cli-framework AGENTS.md](https://github.com/199-biotechnologies/agent-cli-framework/blob/main/AGENTS.md) -- the framework rules this repo inherits
+- [agent-cli-framework README](https://github.com/paperfoot/agent-cli-framework) -- the full pattern catalogue
+- [agent-cli-framework AGENTS.md](https://github.com/paperfoot/agent-cli-framework/blob/main/AGENTS.md) -- the framework rules this repo inherits

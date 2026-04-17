@@ -298,7 +298,7 @@ We have presented *writer*, an open-source system for voice-faithful text genera
 
 The broader argument is that linguistic diversity — the property that makes Adams sound different from Hemingway, that makes your writing sound different from anyone else's — is worth preserving and recovering. Language models should be tools that amplify individual voice, not tools that replace it with a median.
 
-Code and fingerprint data are available at https://github.com/199-biotechnologies/writer.
+Code and fingerprint data are available at https://github.com/paperfoot/writer-cli.
 
 ---
 

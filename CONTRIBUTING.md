@@ -5,7 +5,7 @@ Thanks for wanting to make `writer` better.
 ## Quick start
 
 ```bash
-git clone https://github.com/199-biotechnologies/writer.git
+git clone https://github.com/paperfoot/writer-cli.git
 cd writer
 cargo build
 cargo test
